@@ -1,0 +1,13 @@
+.env
+.env.*
+!.env.example
+venv/
+__pycache__/
+*.pyc
+*.log
+*.db
+*.sqlite3
+.DS_Store
+logs/
+history.json
+ansible/inventory/hosts.ini

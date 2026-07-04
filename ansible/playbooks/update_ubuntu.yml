@@ -1,0 +1,10 @@
+---
+- name: Update Ubuntu
+  hosts: ubuntu
+  become: true
+  tasks:
+    - name: Actualizar paquetes con apt
+      apt:
+        update_cache: yes
+        upgrade: dist
+        autoremove: yes
