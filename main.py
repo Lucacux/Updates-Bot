@@ -1,3 +1,4 @@
+# deploy-test 2026-07-08: no-op para validar auto-update por timer (desatendido). Seguro de borrar.
 import discord
 from discord.ext import commands, tasks
 import asyncio
