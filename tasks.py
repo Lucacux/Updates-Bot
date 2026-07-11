@@ -40,7 +40,7 @@ class UpdateTasks(commands.Cog):
             )
             embed.add_field(name='Comandos', value=(
                 '`!update check` — paquetes pendientes\n'
-                '`!update run [arch|ubuntu|all]` — ejecutar update\n'
+                f'`!update run [{config.RUN_TARGETS_HINT}]` — ejecutar update\n'
                 '`!update status` — estado actual\n'
                 '`!update history` — historial de updates\n'
                 '`!update log <id>` — ver log de un update\n'

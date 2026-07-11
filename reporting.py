@@ -31,7 +31,7 @@ def add_pending_fields(embed, pending, *, with_raw, show_overflow):
     - show_overflow: agrega '_...y N más_' cuando hay >10 pendientes (solo check).
     """
     for host in config.HOSTS:
-        pkgs = pending[host.pkg_key]
+        pkgs = pending.get(host.pkg_key, [])
         if pkgs:
             embed.add_field(
                 name=f'🖥 {host.name} ({len(pkgs)} pendientes)',
@@ -39,7 +39,7 @@ def add_pending_fields(embed, pending, *, with_raw, show_overflow):
                 inline=False
             )
         elif with_raw:
-            raw = pending[f'{host.pkg_key}_raw']
+            raw = pending.get(f'{host.pkg_key}_raw', '')
             confirm = raw if raw and raw != 'NO_UPDATES' else 'Sin actualizaciones pendientes.'
             embed.add_field(
                 name=f'🖥 {host.name} ✅',
@@ -57,14 +57,14 @@ def add_pending_fields(embed, pending, *, with_raw, show_overflow):
 def add_result_fields(embed, packages):
     """Agrega un field por host con los paquetes actualizados (embed final)."""
     for host in config.HOSTS:
-        val, _ = format_packages(packages[host.pkg_key])
+        val, _ = format_packages(packages.get(host.pkg_key, []))
         embed.add_field(name=f'🖥 {host.name}', value=val, inline=False)
 
 
 def pending_summary(pending):
     """Línea 'server-mbp: `N` | pentium: `M`' para !update next."""
     return ' | '.join(
-        f'{host.name}: `{len(pending[host.pkg_key])}`' for host in config.HOSTS
+        f'{host.name}: `{len(pending.get(host.pkg_key, []))}`' for host in config.HOSTS
     )
 
 

@@ -4,6 +4,12 @@ your-arch-host ansible_connection=local
 [ubuntu]
 your-ubuntu-host ansible_host=192.168.x.x ansible_user=youruser ansible_ssh_private_key_file=~/.ssh/id_ed25519_ansible ansible_port=22
 
+# El alias DEBE ser 'sempron': el bot matchea las líneas `[sempron]` del output
+# de Ansible para reportar sus paquetes. ansible_host lleva la IP real.
+[debian]
+sempron ansible_host=192.168.2.20 ansible_user=youruser ansible_ssh_private_key_file=~/.ssh/id_ed25519_ansible ansible_port=22
+
 [servers:children]
 arch
 ubuntu
+debian

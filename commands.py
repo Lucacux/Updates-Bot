@@ -57,7 +57,7 @@ class UpdateCommands(commands.Cog):
             return await ctx.send('⚠️ Ya hay un update en curso. Usá `!update status`.')
 
         if target not in config.PLAYBOOKS:
-            return await ctx.send('❌ Target inválido. Usá `all`, `arch` o `ubuntu`.')
+            return await ctx.send(f'❌ Target inválido. Usá {config.VALID_TARGETS_MSG}.')
 
         embed = discord.Embed(
             title='🔄 Update iniciado',

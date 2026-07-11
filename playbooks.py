@@ -60,9 +60,11 @@ async def check_pending_updates():
     for host in config.HOSTS:
         strat = _CHECK[host.flavor]
         try:
+            # Apunta por HOST (no por grupo): N hosts del mismo grupo no colisionan
+            # en el primer bloque `>>`.
             result = await asyncio.to_thread(
                 subprocess.run,
-                ['ansible', host.check_group, '-m', 'shell', '-a', strat['shell']],
+                ['ansible', host.name, '-m', 'shell', '-a', strat['shell']],
                 capture_output=True, text=True, cwd=config.ANSIBLE_DIR
             )
             if '>>' in result.stdout:
