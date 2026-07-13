@@ -72,6 +72,14 @@ HOSTS = [
         pkg_key='arch', target='arch',
         playbook='update_arch.yml', play_marker='PLAY [Update Arch',
     ),
+    # celeron@192.168.1.60:2222 — Arch (pacman). Comparte target/playbook 'arch'
+    # con server-mbp: `!update run arch` actualiza ambos y se reportan por
+    # separado. pkg_key propio ('celeron'), distinto de 'arch' de server-mbp.
+    Host(
+        name='celeron', short='celeron', flavor='pacman',
+        pkg_key='celeron', target='arch',
+        playbook='update_arch.yml', play_marker='PLAY [Update Arch',
+    ),
     Host(
         name='pentium', short='pentium', flavor='apt',
         pkg_key='ubuntu', target='ubuntu',
