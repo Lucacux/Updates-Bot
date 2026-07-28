@@ -36,6 +36,10 @@ def _parse_apt_pending(raw):
     return lines
 
 
+def _parse_apk_pending(raw):
+    return [l.split()[0] for l in raw.splitlines() if '[upgradable from:' in l]
+
+
 _CHECK = {
     'pacman': {
         'shell': 'pacman -Sy --noconfirm -q 2>/dev/null; '
@@ -46,6 +50,11 @@ _CHECK = {
         'shell': 'apt-get update -qq 2>/dev/null; '
                  'apt list --upgradable 2>/dev/null | grep -v "^Listing" || echo "NO_UPDATES"',
         'parse': _parse_apt_pending,
+    },
+    'apk': {
+        'shell': 'apk update -q 2>/dev/null; '
+                 'apk list --upgradable 2>/dev/null || echo "NO_UPDATES"',
+        'parse': _parse_apk_pending,
     },
 }
 
@@ -150,7 +159,7 @@ def parse_upgraded_packages(output_lines, host_type):
         except (ValueError, json.JSONDecodeError):
             continue
 
-        # --- Modulo pacman (Arch): campo 'packages' con lista de nombres ---
+        # --- Modulo pacman (Arch) y apk (Alpine): campo 'packages' con lista de nombres ---
         if 'packages' in data and isinstance(data['packages'], list):
             pkgs = [p for p in data['packages'] if isinstance(p, str) and p.strip()]
             if pkgs:

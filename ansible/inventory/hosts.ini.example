@@ -9,7 +9,20 @@ your-ubuntu-host ansible_host=192.168.x.x ansible_user=youruser ansible_ssh_priv
 [debian]
 sempron ansible_host=192.168.2.20 ansible_user=youruser ansible_ssh_private_key_file=~/.ssh/id_ed25519_ansible ansible_port=22
 
+# VM Debian en Proxmox (grupo/target propio 'proxmox-debian': manual-only,
+# no la toca `update_all.yml` ni el cron diario — ver config.py).
+[proxmox-debian]
+debian-monitoring ansible_host=192.168.1.60 ansible_user=youruser ansible_ssh_private_key_file=~/.ssh/id_ed25519_ansible ansible_port=22
+
+# LXC Alpine SIN SSH propio: Ansible entra por SSH al HOST Proxmox y ejecuta
+# `pct exec <vmid>` (community.proxmox.proxmox_pct_remote). ansible_host es
+# la IP del host Proxmox, NO la del LXC. proxmox_vmid es el ID del contenedor.
+[lxc-alpine]
+alpine-monitoring ansible_host=192.168.1.70 ansible_user=ansible-pct ansible_ssh_private_key_file=~/.ssh/id_ed25519_ansible ansible_port=22 ansible_connection=community.proxmox.proxmox_pct_remote proxmox_vmid=101
+
 [servers:children]
 arch
 ubuntu
 debian
+proxmox-debian
+lxc-alpine

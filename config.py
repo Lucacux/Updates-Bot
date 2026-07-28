@@ -72,14 +72,6 @@ HOSTS = [
         pkg_key='arch', target='arch',
         playbook='update_arch.yml', play_marker='PLAY [Update Arch',
     ),
-    # celeron@192.168.1.60:2222 — Arch (pacman). Comparte target/playbook 'arch'
-    # con server-mbp: `!update run arch` actualiza ambos y se reportan por
-    # separado. pkg_key propio ('celeron'), distinto de 'arch' de server-mbp.
-    Host(
-        name='celeron', short='celeron', flavor='pacman',
-        pkg_key='celeron', target='arch',
-        playbook='update_arch.yml', play_marker='PLAY [Update Arch',
-    ),
     Host(
         name='pentium', short='pentium', flavor='apt',
         pkg_key='ubuntu', target='ubuntu',
@@ -91,13 +83,40 @@ HOSTS = [
         pkg_key='debian', target='debian',
         playbook='update_debian.yml', play_marker='PLAY [Update Debian',
     ),
-    # ── Próximo host: laptop Arch server ──────────────────────────────
-    # Sumar acá una entrada y su línea en el inventario ([arch] o grupo propio):
-    # Host(name='arch-laptop', short='laptop', flavor='pacman',
-    #      pkg_key='arch-laptop', target='arch',
-    #      playbook='update_arch.yml', play_marker='PLAY [Update Arch'),
-    # Comparte target/playbook 'arch' con server-mbp (se actualizan juntos con
-    # `!update run arch`) y se reporta como host propio. pkg_key debe ser único.
+    # debian-monitoring@192.168.1.60 — VM Debian en Proxmox (HP Pavilion,
+    # 192.168.1.70), corre Prometheus+Grafana. Target propio 'proxmox-debian'
+    # (NO 'debian'): un reboot pendiente ahí tumba el monitoreo en silencio,
+    # así que queda afuera de `update_all.yml` — solo se actualiza con
+    # `!update run proxmox-debian`, nunca por el cron diario ni por `all`.
+    Host(
+        name='debian-monitoring', short='monitor', flavor='apt',
+        pkg_key='monitoring-vm', target='proxmox-debian',
+        playbook='update_proxmox_debian.yml', play_marker='PLAY [Update Proxmox Debian',
+    ),
+    # alpine-monitoring — LXC Alpine (vmid 101) en el mismo Proxmox, sin SSH
+    # propio por diseño: Ansible llega vía `community.proxmox.proxmox_pct_remote`
+    # (SSH al host Proxmox + `pct exec`), ver ansible/inventory/hosts.ini.example.
+    # Mismo motivo que arriba para el target propio 'lxc-alpine' (manual-only).
+    Host(
+        name='alpine-monitoring', short='alpine', flavor='apk',
+        pkg_key='alpine-monitoring', target='lxc-alpine',
+        playbook='update_alpine.yml', play_marker='PLAY [Update Alpine',
+    ),
+    # ── Cómo sumar el próximo host ──────────────────────────────────────
+    # Dos recetas según qué tan seguro sea auto-actualizarlo sin supervisión:
+    #
+    # 1) Recurso más para agregar a la flota normal (ej. otra laptop Arch):
+    #    reusar un target EXISTENTE ('arch'/'ubuntu'/'debian') + sumar la
+    #    entrada al mismo grupo del inventario. Se actualiza junto con el
+    #    resto en `!update run <target>`, `!update run all` y el cron diario.
+    #    Host(name='arch-laptop', short='laptop', flavor='pacman',
+    #         pkg_key='arch-laptop', target='arch',
+    #         playbook='update_arch.yml', play_marker='PLAY [Update Arch'),
+    #
+    # 2) Host sensible que NO debe rebootear sin supervisión (como los dos de
+    #    Proxmox de arriba): target NUEVO con su propio playbook/grupo, sin
+    #    tocar `update_all.yml` → solo `!update run <target>` manual.
+    #    pkg_key siempre debe ser único en toda la lista.
 ]
 
 ALL_PLAYBOOK = 'update_all.yml'

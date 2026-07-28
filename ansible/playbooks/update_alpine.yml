@@ -1,0 +1,9 @@
+---
+- name: Update Alpine LXC
+  hosts: lxc-alpine
+  become: false
+  tasks:
+    - name: Actualizar paquetes con apk
+      community.general.apk:
+        update_cache: yes
+        upgrade: latest
