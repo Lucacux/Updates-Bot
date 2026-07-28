@@ -1,0 +1,19 @@
+---
+- name: Update Proxmox Debian VM
+  hosts: proxmox-debian
+  become: true
+  tasks:
+    - name: Actualizar paquetes con apt
+      apt:
+        update_cache: yes
+        upgrade: dist
+        autoremove: yes
+
+- name: Update Alpine LXC
+  hosts: lxc-alpine
+  become: false
+  tasks:
+    - name: Actualizar paquetes con apk
+      community.general.apk:
+        update_cache: yes
+        upgrade: latest

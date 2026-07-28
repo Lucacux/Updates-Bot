@@ -46,6 +46,8 @@ Package-manager support (`flavor` in `config.py`) is a small dict entry in `play
 
 LXCs on Proxmox without their own SSH server are reached via `community.proxmox.proxmox_pct_remote` (SSH to the Proxmox host + `pct exec`) — see the `[lxc-alpine]` example in `hosts.ini.example`.
 
+Manual-only targets that live on the same Proxmox host can be grouped into a composite target (`config.MANUAL_ONLY_TARGETS` + `update_proxmox_all.yml`) so `!update run proxmox` updates all of them in one command, while each still works individually via its own `!update run <target>`. The composite is never referenced from `update_all.yml` either — grouping doesn't change whether something is safe to sweep automatically.
+
 ## 📄 License
 
 Personal infrastructure project — free to use as reference.

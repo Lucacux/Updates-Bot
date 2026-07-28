@@ -117,6 +117,12 @@ HOSTS = [
     #    Proxmox de arriba): target NUEVO con su propio playbook/grupo, sin
     #    tocar `update_all.yml` → solo `!update run <target>` manual.
     #    pkg_key siempre debe ser único en toda la lista.
+    #
+    # Si varios hosts manual-only conviven en el mismo Proxmox y tiene sentido
+    # actualizarlos juntos con un solo comando (sin que eso los meta en el
+    # sweep automático), agregalos a MANUAL_ONLY_TARGETS más abajo y sumá su
+    # play a update_proxmox_all.yml — así queda `!update run proxmox` además
+    # de cada `!update run <target>` individual.
 ]
 
 ALL_PLAYBOOK = 'update_all.yml'
@@ -131,11 +137,23 @@ def _hosts_for(target):
     return [h for h in HOSTS if h.target == target]
 
 
+# Targets manual-only: sus hosts NO están en update_all.yml (a propósito, ver
+# los comentarios junto a cada Host de arriba) — 'all' no debe listarlos como
+# si el cron diario los tocara.
+MANUAL_ONLY_TARGETS = {'proxmox-debian', 'lxc-alpine'}
+
 PLAYBOOKS = {'all': ALL_PLAYBOOK, **{t: _hosts_for(t)[0].playbook for t in TARGET_KEYS}}
 TARGETS_STR = {
-    'all': ' + '.join(h.name for h in HOSTS),
+    'all': ' + '.join(h.name for h in HOSTS if h.target not in MANUAL_ONLY_TARGETS),
     **{t: ' + '.join(h.name for h in _hosts_for(t)) for t in TARGET_KEYS},
 }
+
+# Target compuesto manual-only: agrupa los guests de Proxmox para poder
+# actualizarlos juntos con `!update run proxmox` sin sumarlos a `update_all.yml`.
+# Cada uno sigue siendo corrible por separado con su propio target
+# ('proxmox-debian', 'lxc-alpine') — esto es solo una conveniencia extra.
+PLAYBOOKS['proxmox'] = 'update_proxmox_all.yml'
+TARGETS_STR['proxmox'] = ' + '.join(h.name for h in HOSTS if h.target in MANUAL_ONLY_TARGETS)
 
 
 def _fmt_targets(keys):
@@ -146,5 +164,5 @@ def _fmt_targets(keys):
 
 
 # Textos de targets, derivados de HOSTS para que no queden stale al sumar hosts.
-VALID_TARGETS_MSG = _fmt_targets(list(PLAYBOOKS))          # `all`, `arch`, `ubuntu` o `debian`
-RUN_TARGETS_HINT = '|'.join(TARGET_KEYS + ['all'])         # arch|ubuntu|debian|all
+VALID_TARGETS_MSG = _fmt_targets(list(PLAYBOOKS))          # `all`, `arch`, `ubuntu`, `debian` o `proxmox`
+RUN_TARGETS_HINT = '|'.join(TARGET_KEYS + ['proxmox', 'all'])  # arch|ubuntu|debian|proxmox|all
