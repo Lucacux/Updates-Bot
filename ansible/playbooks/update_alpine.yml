@@ -1,6 +1,6 @@
 ---
 - name: Update Alpine LXC
-  hosts: lxc-alpine
+  hosts: lxc_alpine
   become: false
   tasks:
     - name: Actualizar paquetes con apk

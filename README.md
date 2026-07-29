@@ -44,7 +44,7 @@ Package-manager support (`flavor` in `config.py`) is a small dict entry in `play
 1. **Fine to sweep automatically** (a general-purpose box you don't mind rebooting on the daily schedule): reuse an existing `target` (`arch`/`ubuntu`/`debian`) and add the host to that same inventory group. It rides along with `!update run <target>`, `!update run all`, and the daily auto-update.
 2. **Sensitive — must never update unattended** (e.g. a VM/LXC something else depends on, like a monitoring stack): give it its own `target` with its own playbook/inventory group, and don't reference that group from `update_all.yml`. It only updates via an explicit `!update run <target>`.
 
-LXCs on Proxmox without their own SSH server are reached via `community.proxmox.proxmox_pct_remote` (SSH to the Proxmox host + `pct exec`) — see the `[lxc-alpine]` example in `hosts.ini.example`.
+LXCs on Proxmox without their own SSH server are reached via `community.proxmox.proxmox_pct_remote` (SSH to the Proxmox host + `pct exec`) — see the `[lxc_alpine]` example in `hosts.ini.example`.
 
 Manual-only targets that live on the same Proxmox host can be grouped into a composite target (`config.MANUAL_ONLY_TARGETS` + `update_proxmox_all.yml`) so `!update run proxmox` updates all of them in one command, while each still works individually via its own `!update run <target>`. The composite is never referenced from `update_all.yml` either — grouping doesn't change whether something is safe to sweep automatically.
 
