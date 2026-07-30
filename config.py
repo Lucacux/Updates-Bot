@@ -44,6 +44,12 @@ os.makedirs(LOGS_DIR, exist_ok=True)
 DOCKER_HOSTS = ['server-mbp', 'pentium']
 ADVISOR_STATE_DIR = '/var/lib/vuln-sentinel'
 ADVISOR_PROPOSALS = f'{ADVISOR_STATE_DIR}/proposals.json'
+# Trazabilidad: historial de aplicaciones + transcripciones completas de cada
+# corrida. Los escribe `apply_update.py` en el host; el bot solo los lee.
+# Separados de HISTORY_FILE (el de `!update`) a propósito: son ciclos de vida
+# distintos, y este guarda 200 entradas contra las 20 del historial del SO.
+ADVISOR_HISTORY = f'{ADVISOR_STATE_DIR}/apply-history.json'
+ADVISOR_LOGS_DIR = f'{ADVISOR_STATE_DIR}/logs'
 
 
 # ── Registro de hosts ──────────────────────────────────────────────────

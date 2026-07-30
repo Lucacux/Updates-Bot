@@ -16,8 +16,16 @@ Diferencia importante con `!update`: los paquetes del SO se actualizan solos
 todos los días; las imágenes Docker NO. Acá siempre hay una persona que aprueba,
 porque un contenedor que no vuelve a levantar se lleva puesto un servicio entero
 y, si guarda datos, un rollback no deshace lo que la versión nueva ya escribió.
+
+Precisamente porque hay una persona decidiendo, hace falta trazabilidad: quién
+aprobó qué, cuándo, con qué números a la vista y cómo terminó. `!docker history`
+y `!docker log` leen el registro que deja `apply_update.py` en cada host. Ese
+registro incluye los intentos **rechazados**, que son los que más se extrañan
+después: "¿por qué esto sigue desactualizado?" se contesta con un rechazo
+guardado, no con la ausencia de un éxito.
 """
 import asyncio
+import io
 import json
 import subprocess
 from datetime import datetime
@@ -41,6 +49,32 @@ _VERDICT_ICON = {
     'review': '🔵', 'optional': '⚪', 'skip': '⚫',
 }
 _RISK_ICON = {'low': '🟢', 'medium': '🟡', 'high': '🔴'}
+
+# Cómo terminó cada intento, en el historial. `refused` y `dry_run` no cambiaron
+# nada en el host, pero se registran igual: son parte de la traza de decisiones.
+_RESULT = {
+    'applied':         ('✅', 'aplicado',            0x2ecc71),
+    'rolled_back':     ('↩️', 'revertido',           0xe67e22),
+    'rollback_failed': ('🔥', 'rollback falló',      0xe74c3c),
+    'refused':         ('🚫', 'rechazado',           0x95a5a6),
+    'dry_run':         ('🧪', 'simulacro',           0x3498db),
+    'error':           ('❌', 'error',               0xe74c3c),
+}
+
+
+def _result_of(entry):
+    return _RESULT.get(entry.get('result'), ('•', entry.get('result', '?'), 0x95a5a6))
+
+
+def _actor(author):
+    """Identidad de quien aprueba, en forma segura para pasar por shell.
+
+    El nombre de Discord lo elige el usuario, y acá termina dentro de un
+    `ansible -m shell`: sin filtrar, un nick con backticks o `;` sería inyección
+    de comandos en toda la flota. Se deja solo lo que identifica y no ejecuta.
+    """
+    safe = ''.join(c for c in str(author) if c.isalnum() or c in '._-')
+    return f'discord:{safe[:48] or author.id}'
 
 
 def _fmt_move(p):
@@ -117,6 +151,35 @@ class DockerUpdates(commands.Cog):
         proposals.sort(key=lambda p: order.get(p['verdict']['action'], 9))
         return proposals, errors
 
+    async def _load_history(self):
+        """Historial de aplicaciones de toda la flota, del más nuevo al más viejo.
+
+        Cada host guarda el suyo (lo escribe apply_update.py ahí mismo, junto al
+        servicio que tocó). El bot los junta para la vista, pero no los copia a
+        ningún lado: la fuente de verdad sigue siendo el host donde pasó.
+        """
+        entries, errors = [], []
+        for host in config.DOCKER_HOSTS:
+            ok, out = await _ansible_shell(host, f'cat {config.ADVISOR_HISTORY}', timeout=60)
+            if not ok:
+                errors.append(f'{host}: sin historial todavía o host inalcanzable')
+                continue
+            try:
+                payload = json.loads(out)
+            except ValueError:
+                errors.append(f'{host}: el historial no es JSON válido')
+                continue
+            for seq, e in enumerate(payload):
+                e['_host'] = host
+                e['_seq'] = seq          # orden de escritura dentro de su host
+                entries.append(e)
+        # El timestamp tiene resolución de un segundo, así que dos eventos
+        # seguidos empatan y el orden quedaría librado a la estabilidad del
+        # sort. Se desempata por posición en el archivo, que es el orden real
+        # en que se escribieron.
+        entries.sort(key=lambda e: (e.get('at', 0), e['_seq']), reverse=True)
+        return entries, errors
+
     async def _find(self, pid):
         proposals, _ = await self._load_all()
         for p in proposals:
@@ -128,7 +191,8 @@ class DockerUpdates(commands.Cog):
     @commands.group(name='docker', invoke_without_command=True)
     async def docker_group(self, ctx):
         await ctx.send(
-            'Usá `!docker status`, `!docker show <id>`, `!docker apply <id>` o `!docker scan`.'
+            'Usá `!docker status`, `!docker show <id>`, `!docker apply <id>`, '
+            '`!docker scan`, `!docker history` o `!docker log <n>`.'
         )
 
     @docker_group.command(name='status')
@@ -245,6 +309,7 @@ class DockerUpdates(commands.Cog):
                 + f'\n\nSi ya tenés backup y querés seguir igual: `!docker apply {pid} forzar`'
             )
 
+        actor = _actor(ctx.author)
         embed = discord.Embed(
             title='🐳 Actualizando imagen',
             description=f'**{p["container"]}** en `{p["host"]}`\n'
@@ -253,9 +318,10 @@ class DockerUpdates(commands.Cog):
             color=0x3498db,
             timestamp=datetime.now(),
         )
+        embed.set_footer(text=f'Aprobado por {ctx.author} · queda en !docker history')
         msg = await ctx.send(embed=embed)
 
-        flags = '--yes' + (' --allow-high-risk' if high else '')
+        flags = f'--yes --actor {actor}' + (' --allow-high-risk' if high else '')
         self._applying = True
         try:
             ok, out = await _ansible_shell(p['host'], f'apply_update.py {pid} {flags}', timeout=1200)
@@ -272,9 +338,117 @@ class DockerUpdates(commands.Cog):
             timestamp=datetime.now(),
         )
         result.add_field(name='📋 Salida', value=f'```\n{tail}\n```'[:1024], inline=False)
+        result.add_field(
+            name='🧾 Queda registrado',
+            value=f'Aprobado por **{ctx.author}**. Log completo con `!docker log 1`.',
+            inline=False,
+        )
         if ok:
             result.set_footer(text='Corré !docker scan para recalcular el análisis.')
         await msg.edit(embed=result)
+
+    @docker_group.command(name='history')
+    async def docker_history(self, ctx, limit: int = 10):
+        """Quién aprobó qué, cuándo y cómo terminó."""
+        limit = max(1, min(limit, 20))
+        msg = await ctx.send('🧾 Leyendo el historial...')
+        entries, errors = await self._load_history()
+
+        if not entries:
+            embed = discord.Embed(
+                title='🐳 Sin actualizaciones de imagen registradas',
+                description='Todavía no se aplicó ninguna propuesta. Mirá `!docker status`.',
+                color=0x95a5a6, timestamp=datetime.now(),
+            )
+            if errors:
+                embed.add_field(name='⚠️ Hosts sin datos', value='\n'.join(errors), inline=False)
+            return await msg.edit(content=None, embed=embed)
+
+        shown = entries[:limit]
+        applied = sum(1 for e in entries if e.get('result') == 'applied')
+        embed = discord.Embed(
+            title=f'🐳 Historial de imágenes — {len(entries)} registro(s)',
+            description=f'{applied} aplicada(s) con éxito. El número entre corchetes es el '
+                        'que va en `!docker log <n>`.',
+            color=0x3498db, timestamp=datetime.now(),
+        )
+
+        for i, e in enumerate(shown, start=1):
+            icon, label, _ = _result_of(e)
+            when = datetime.fromtimestamp(e.get('at', 0)).strftime('%d/%m %H:%M')
+            move = (f'`{e["from"]}` → `{e["to"]}`'
+                    if e.get('from') and e.get('to') and e['from'] != e['to']
+                    else f'`{e.get("from") or e.get("id")}`')
+            line = f'{move}\n👤 {e.get("actor", "?")} · 🖥 {e["_host"]} · 🕑 {when}'
+            if e.get('cve_delta'):
+                delta = _fmt_delta(e['cve_delta'])
+                if delta not in ('sin datos', 'sin cambios en C/H'):
+                    line += f' · 🛡 {delta}'
+            if e.get('detail') and e.get('result') != 'applied':
+                line += f'\n↳ {e["detail"][:160]}'
+            embed.add_field(
+                name=f'{icon} [{i}] {e.get("container") or e.get("id")} — {label}',
+                value=line, inline=False,
+            )
+
+        if errors:
+            embed.add_field(name='⚠️ Hosts sin datos', value='\n'.join(errors), inline=False)
+        embed.set_footer(text='Incluye los intentos rechazados: también son parte de la traza.')
+        await msg.edit(content=None, embed=embed)
+
+    @docker_group.command(name='log')
+    async def docker_log(self, ctx, index: int = 1):
+        """Transcripción completa de una corrida del historial."""
+        entries, _ = await self._load_history()
+        if not entries:
+            return await ctx.send('❌ Todavía no hay nada en el historial.')
+        if not 1 <= index <= len(entries):
+            return await ctx.send(f'❌ Elegí un número entre 1 y {len(entries)} (mirá `!docker history`).')
+
+        entry = entries[index - 1]
+        icon, label, color = _result_of(entry)
+        when = datetime.fromtimestamp(entry.get('at', 0)).strftime('%d/%m/%Y %H:%M:%S')
+        name = entry.get('log_file')
+        if not name:
+            # Un rechazo corta antes de ejecutar nada, así que no hay
+            # transcripción que mostrar: el motivo ES todo el registro.
+            return await ctx.send(embed=discord.Embed(
+                title=f'{icon} {entry.get("container") or entry.get("id")} — {label}',
+                description=f'👤 **{entry.get("actor", "?")}** · 🖥 `{entry["_host"]}` · 🕑 {when}\n\n'
+                            f'No hay transcripción porque no se ejecutó nada.\n'
+                            f'**Motivo:** {entry.get("detail") or "sin detalle"}',
+                color=color, timestamp=datetime.now(),
+            ))
+        # El nombre sale de nuestro propio JSON, pero igual se acota a un basename:
+        # el path va a parar a un shell y no hay razón para dejarlo salir del directorio.
+        name = name.replace('/', '').replace('..', '')
+        ok, out = await _ansible_shell(
+            entry['_host'], f'cat {config.ADVISOR_LOGS_DIR}/{name}', timeout=60)
+        if not ok:
+            return await ctx.send(f'❌ No pude leer el log en `{entry["_host"]}`: {out[:300]}')
+
+        embed = discord.Embed(
+            title=f'{icon} {entry.get("container") or entry.get("id")} — {label}',
+            description=f'👤 **{entry.get("actor", "?")}** · 🖥 `{entry["_host"]}` · 🕑 {when}',
+            color=color, timestamp=datetime.now(),
+        )
+        if entry.get('summary'):
+            embed.add_field(name='⚖️ Veredicto al momento de aprobar',
+                            value=f'{entry["summary"]} (riesgo {entry.get("risk_tier", "?")})',
+                            inline=False)
+        if entry.get('cve_before') and entry.get('cve_after'):
+            before, after = entry['cve_before'], entry['cve_after']
+            embed.add_field(
+                name='🛡 CVEs esperados',
+                value='\n'.join(
+                    f'**{sev.capitalize()}**: {before.get(sev, 0)} → {after.get(sev, 0)}'
+                    for sev in ('critical', 'high')),
+                inline=False)
+
+        # El log entero como adjunto en vez de recortado en el embed: la parte
+        # interesante de una corrida fallida casi nunca está en las últimas líneas.
+        buf = io.BytesIO(out.encode('utf-8', errors='replace'))
+        await ctx.send(embed=embed, file=discord.File(buf, filename=name))
 
     @docker_group.command(name='scan')
     async def docker_scan(self, ctx):

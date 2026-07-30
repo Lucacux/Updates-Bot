@@ -46,6 +46,14 @@ class UpdateTasks(commands.Cog):
                 '`!update log <id>` — ver log de un update\n'
                 '`!update next` — próximo update automático'
             ), inline=False)
+            # Grupo aparte: el SO se actualiza solo, las imágenes las aprobás vos.
+            embed.add_field(name='Imágenes Docker', value=(
+                '`!docker status` — imágenes con actualización disponible\n'
+                '`!docker show <id>` — CVEs y riesgo de una propuesta\n'
+                '`!docker apply <id>` — aprobar (con rollback automático)\n'
+                '`!docker history` — quién aprobó qué y cómo terminó\n'
+                '`!docker log <n>` — transcripción completa de una corrida'
+            ), inline=False)
             embed.add_field(
                 name='⏰ Update automático',
                 value=f'Todos los días a las {config.UPDATE_HOUR:02d}:00',
