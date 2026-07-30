@@ -15,6 +15,14 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
+def _env_int(name, default):
+    try:
+        return int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
 # ── Entorno (error de arranque si falta lo imprescindible) ─────────────
 TOKEN = os.getenv('DISCORD_TOKEN')
 _CHANNEL_RAW = os.getenv('DISCORD_CHANNEL_ID')
@@ -24,7 +32,28 @@ if not TOKEN or not _CHANNEL_RAW:
         'El bot no puede arrancar sin ellos.'
     )
 CHANNEL_ID = int(_CHANNEL_RAW)
-UPDATE_HOUR = int(os.getenv('UPDATE_HOUR', '12'))
+UPDATE_HOUR = _env_int('UPDATE_HOUR', 12)
+
+# ── Contrato local con WOL-Bot ─────────────────────────────────────────
+# Updates-Bot NO duplica MACs, broadcasts ni lógica de encendido: consume el
+# CLI versionado por WOL-Bot, que vive en el mismo controller. Antes de tocar
+# un host WOL toma además una reserva con TTL para que el scheduler no lo apague
+# a mitad del playbook.
+WOL_PYTHON = os.path.expanduser(os.getenv(
+    'WOL_PYTHON',
+    '~/discord-wake-on-lan/venv/bin/python',
+))
+WOL_CTL = os.path.expanduser(os.getenv(
+    'WOL_CTL',
+    '~/discord-wake-on-lan/wolctl.py',
+))
+WOL_ATTEMPTS = _env_int('WOL_ATTEMPTS', 3)
+WOL_ATTEMPT_TIMEOUT_SECS = _env_int('WOL_ATTEMPT_TIMEOUT_SECS', 180)
+WOL_POLL_SECS = _env_int('WOL_POLL_SECS', 10)
+WOL_BOOT_GRACE_SECS = _env_int('WOL_BOOT_GRACE_SECS', 90)
+WOL_ANSIBLE_READY_TIMEOUT_SECS = _env_int('WOL_ANSIBLE_READY_TIMEOUT_SECS', 90)
+WOL_MAINTENANCE_TTL_SECS = _env_int('WOL_MAINTENANCE_TTL_SECS', 3 * 3600)
+WOL_MAINTENANCE_OWNER = 'updates-bot-daily'
 
 # ── Estado en el host (fuera de git; NO mover ni renombrar) ────────────
 ANSIBLE_DIR = os.path.expanduser('~/discord-bot-updates/ansible')
@@ -53,6 +82,8 @@ class Host:
                     comparten playbook, que apunta al grupo Ansible).
     - play_marker:  substring del output que indica que arrancó la PLAY del
                     grupo (para el estado "en progreso" en vivo).
+    - wol_key:       clave de WOL-Bot para hosts físicos que pueden estar
+                    apagados. None significa que no se intenta WOL.
 
     Nota de escalabilidad: el chequeo de pendientes apunta por HOST (ansible
     <name>), no por grupo, así N hosts del mismo grupo no colisionan.
@@ -64,6 +95,7 @@ class Host:
     target: str
     playbook: str
     play_marker: str
+    wol_key: str | None = None
 
 
 HOSTS = [
@@ -76,12 +108,14 @@ HOSTS = [
         name='pentium', short='pentium', flavor='apt',
         pkg_key='ubuntu', target='ubuntu',
         playbook='update_ubuntu.yml', play_marker='PLAY [Update Ubuntu',
+        wol_key='media',
     ),
     # sempron@192.168.2.20 — Debian Trixie (apt), grupo Ansible propio [debian].
     Host(
         name='sempron', short='sempron', flavor='apt',
         pkg_key='debian', target='debian',
         playbook='update_debian.yml', play_marker='PLAY [Update Debian',
+        wol_key='nas',
     ),
     # debian-monitoring@192.168.1.60 — VM Debian en Proxmox (HP Pavilion,
     # 192.168.1.70), corre Prometheus+Grafana. Target propio 'proxmox-debian'

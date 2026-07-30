@@ -53,45 +53,53 @@ class UpdateCommands(commands.Cog):
 
     @update_group.command(name='run')
     async def update_run(self, ctx, target: str = 'all'):
-        if self.runner.running:
+        if not self.runner.reserve():
             return await ctx.send('⚠️ Ya hay un update en curso. Usá `!update status`.')
 
         if target not in config.PLAYBOOKS:
+            self.runner.release()
             return await ctx.send(f'❌ Target inválido. Usá {config.VALID_TARGETS_MSG}.')
 
-        embed = discord.Embed(
-            title='🔄 Update iniciado',
-            description=f'Actualizando **{config.TARGETS_STR[target]}**...',
-            color=0x3498db,
-            timestamp=datetime.now()
-        )
-        embed.set_footer(text='El mensaje se actualizará cada 15 segundos.')
-        msg = await ctx.send(embed=embed)
+        try:
+            embed = discord.Embed(
+                title='🔄 Update iniciado',
+                description=f'Actualizando **{config.TARGETS_STR[target]}**...',
+                color=0x3498db,
+                timestamp=datetime.now()
+            )
+            embed.set_footer(text='El mensaje se actualizará cada 15 segundos.')
+            msg = await ctx.send(embed=embed)
 
-        success, duration, packages = await self.runner.run(config.PLAYBOOKS[target], status_msg=msg)
+            success, duration, packages = await self.runner.run(
+                config.PLAYBOOKS[target],
+                status_msg=msg,
+                reserved=True,
+            )
 
-        mins, secs = duration // 60, duration % 60
-        duration_str = f'{mins}m {secs}s' if mins > 0 else f'{secs}s'
+            mins, secs = duration // 60, duration % 60
+            duration_str = f'{mins}m {secs}s' if mins > 0 else f'{secs}s'
 
-        history = load_history()
-        past = [h for h in history[:-1] if h.get('playbook') == config.PLAYBOOKS[target] and h.get('success')]
-        avg_str = ''
-        if past:
-            avg = sum(h['duration'] for h in past[-5:]) // len(past[-5:])
-            avg_mins, avg_secs = avg // 60, avg % 60
-            avg_str = f'{avg_mins}m {avg_secs}s' if avg_mins > 0 else f'{avg_secs}s'
+            history = load_history()
+            past = [h for h in history[:-1] if h.get('playbook') == config.PLAYBOOKS[target] and h.get('success')]
+            avg_str = ''
+            if past:
+                avg = sum(h['duration'] for h in past[-5:]) // len(past[-5:])
+                avg_mins, avg_secs = avg // 60, avg % 60
+                avg_str = f'{avg_mins}m {avg_secs}s' if avg_mins > 0 else f'{avg_secs}s'
 
-        result_embed = discord.Embed(
-            title='✅ Update completado' if success else '❌ Update fallido',
-            color=0x2ecc71 if success else 0xe74c3c,
-            timestamp=datetime.now()
-        )
-        result_embed.add_field(name='⏱ Duración', value=duration_str, inline=True)
-        if avg_str:
-            result_embed.add_field(name='📊 Promedio histórico', value=avg_str, inline=True)
+            result_embed = discord.Embed(
+                title='✅ Update completado' if success else '❌ Update fallido',
+                color=0x2ecc71 if success else 0xe74c3c,
+                timestamp=datetime.now()
+            )
+            result_embed.add_field(name='⏱ Duración', value=duration_str, inline=True)
+            if avg_str:
+                result_embed.add_field(name='📊 Promedio histórico', value=avg_str, inline=True)
 
-        reporting.add_result_fields(result_embed, packages)
-        await msg.edit(embed=result_embed)
+            reporting.add_result_fields(result_embed, packages)
+            await msg.edit(embed=result_embed)
+        finally:
+            self.runner.release()
 
     @update_group.command(name='history')
     async def update_history(self, ctx):

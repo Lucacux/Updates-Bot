@@ -185,13 +185,18 @@ def parse_upgraded_packages(output_lines, host_type):
 # ==========================================
 # EJECUCIÓN DE PLAYBOOKS
 # ==========================================
+def build_playbook_command(playbook, limit_hosts=None):
+    cmd = ['ansible-playbook', f'playbooks/{playbook}', '-v']
+    if limit_hosts:
+        cmd.extend(['--limit', ','.join(limit_hosts)])
+    return cmd
+
+
 class PlaybookRunner:
     """Ejecuta playbooks y lleva el estado 'hay un update corriendo'.
 
-    Encapsula lo que antes era el global `update_running`. `running` es un simple
-    flag (no un Lock que bloquee): reproduce exactamente el comportamiento previo
-    — `!update run` lo consulta y se niega si está corriendo; el update diario no
-    consulta nada y arranca igual.
+    La reserva cubre también el preflight WOL del update diario. Así un comando
+    manual no puede arrancar mientras el automático todavía espera el boot.
     """
 
     def __init__(self):
@@ -201,15 +206,35 @@ class PlaybookRunner:
     def running(self):
         return self._running
 
-    async def run(self, playbook, status_msg=None):
+    def reserve(self):
+        """Reserva el runner antes de un preflight largo (WOL/boot/SSH)."""
+        if self._running:
+            return False
         self._running = True
+        return True
+
+    def release(self):
+        self._running = False
+
+    async def run(
+        self,
+        playbook,
+        status_msg=None,
+        *,
+        limit_hosts=None,
+        history_metadata=None,
+        reserved=False,
+    ):
+        if not reserved and not self.reserve():
+            raise RuntimeError('Ya hay un update en curso')
         start = datetime.now()
         timestamp_str = start.strftime('%Y%m%d_%H%M%S')
         full_output = []
 
         try:
+            cmd = build_playbook_command(playbook, limit_hosts)
             proc = await asyncio.create_subprocess_exec(
-                'ansible-playbook', f'playbooks/{playbook}', '-v',
+                *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 cwd=config.ANSIBLE_DIR
@@ -274,8 +299,11 @@ class PlaybookRunner:
                 'packages': results,
                 'log_file': f'update_{timestamp_str}.log'
             }
+            if history_metadata:
+                entry.update(history_metadata)
             save_history(entry)
             return success, duration, results
 
         finally:
-            self._running = False
+            if not reserved:
+                self.release()

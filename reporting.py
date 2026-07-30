@@ -54,9 +54,18 @@ def add_pending_fields(embed, pending, *, with_raw, show_overflow):
             )
 
 
-def add_result_fields(embed, packages):
+def add_result_fields(embed, packages, *, hosts=None, skipped_hosts=None):
     """Agrega un field por host con los paquetes actualizados (embed final)."""
-    for host in config.HOSTS:
+    hosts = config.HOSTS if hosts is None else hosts
+    skipped_hosts = skipped_hosts or {}
+    for host in hosts:
+        if host.name in skipped_hosts:
+            embed.add_field(
+                name=f'⏭ {host.name} omitido',
+                value=skipped_hosts[host.name][:1024],
+                inline=False,
+            )
+            continue
         val, _ = format_packages(packages.get(host.pkg_key, []))
         embed.add_field(name=f'🖥 {host.name}', value=val, inline=False)
 

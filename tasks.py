@@ -11,6 +11,7 @@ from discord.ext import commands, tasks
 
 import config
 import reporting
+from availability import automatic_hosts, prepare_daily_fleet, release_maintenance
 from playbooks import check_pending_updates
 
 
@@ -84,8 +85,10 @@ class UpdateTasks(commands.Cog):
     @tasks.loop(minutes=1)
     async def daily_auto_update(self):
         """
-        Corre todos los días a UPDATE_HOUR (default 12:00).
-        Siempre ejecuta el playbook completo, sin verificar pendientes antes.
+        Corre todos los días a UPDATE_HOUR (default 12:00). Antes del playbook:
+        reserva NAS/homeserver contra apagados, intenta WOL con reintentos y
+        espera a que Ansible confirme el SO. Los que no vuelven se omiten sin
+        hacer fallar la actualización del resto.
         """
         now = datetime.now()
         if now.hour != config.UPDATE_HOUR or now.minute != 0:
@@ -95,33 +98,117 @@ class UpdateTasks(commands.Cog):
         if not channel:
             return
 
-        embed = discord.Embed(
-            title='🤖 Update diario automático iniciado',
-            description='Actualizando todos los servidores...',
-            color=0x3498db,
-            timestamp=datetime.now()
-        )
-        embed.set_footer(text='El mensaje se actualizará cada 15 segundos.')
-        msg = await channel.send(embed=embed)
+        if not self.runner.reserve():
+            await channel.send(embed=discord.Embed(
+                title='⏭ Update diario omitido',
+                description='Ya había otro update en curso al llegar el horario automático.',
+                color=0xf1c40f,
+                timestamp=datetime.now(),
+            ))
+            return
 
-        success, duration, packages = await self.runner.run(config.ALL_PLAYBOOK, status_msg=msg)
+        msg = None
+        preparation = None
+        release_warnings = []
+        try:
+            embed = discord.Embed(
+                title='🔌 Preparando update diario',
+                description=(
+                    'Reservando la ventana de mantenimiento y comprobando '
+                    '**homeserver + NAS**.\n'
+                    'Si alguno está apagado, WOL puede extender esta etapa varios minutos.'
+                ),
+                color=0x3498db,
+                timestamp=datetime.now()
+            )
+            embed.set_footer(text='Proxmox es manual-only y no participa de este flujo.')
+            msg = await channel.send(embed=embed)
 
-        mins, secs = duration // 60, duration % 60
+            preparation = await prepare_daily_fleet()
+            ready_text = ', '.join(preparation.ready_hosts) or 'ninguno'
+            skipped_text = (
+                '\n'.join(f'• **{host}**: {reason}' for host, reason in preparation.skipped_hosts.items())
+                or 'ninguno'
+            )
+            progress = discord.Embed(
+                title='🤖 Update diario automático iniciado',
+                description=(
+                    f'**Listos:** {ready_text}\n'
+                    f'**Omitidos:** {skipped_text}\n\n'
+                    'Ejecutando Ansible sobre los hosts listos...'
+                ),
+                color=0x3498db,
+                timestamp=datetime.now(),
+            )
+            progress.set_footer(text='El mensaje se actualizará cada 15 segundos.')
+            await msg.edit(embed=progress)
 
-        result_embed = discord.Embed(
-            title='✅ Update diario completado' if success else '❌ Update diario fallido',
-            color=0x2ecc71 if success else 0xe74c3c,
-            timestamp=datetime.now()
-        )
-        result_embed.add_field(
-            name='⏱ Duración',
-            value=f'{mins}m {secs}s' if mins > 0 else f'{secs}s',
-            inline=True
-        )
-        result_embed.add_field(
-            name='📄 Log',
-            value=f'`!update log 1`',
-            inline=True
-        )
-        reporting.add_result_fields(result_embed, packages)
-        await msg.edit(embed=result_embed)
+            success, duration, packages = await self.runner.run(
+                config.ALL_PLAYBOOK,
+                status_msg=msg,
+                limit_hosts=preparation.ready_hosts,
+                history_metadata={
+                    'skipped_hosts': preparation.skipped_hosts,
+                    'woken_hosts': preparation.woken_hosts,
+                },
+                reserved=True,
+            )
+
+            mins, secs = duration // 60, duration % 60
+            partial = bool(preparation.skipped_hosts)
+            if not success:
+                title, color = '❌ Update diario fallido', 0xe74c3c
+            elif partial:
+                title, color = '⚠️ Update diario parcial', 0xf1c40f
+            else:
+                title, color = '✅ Update diario completado', 0x2ecc71
+
+            result_embed = discord.Embed(
+                title=title,
+                color=color,
+                timestamp=datetime.now()
+            )
+            result_embed.add_field(
+                name='⏱ Duración de Ansible',
+                value=f'{mins}m {secs}s' if mins > 0 else f'{secs}s',
+                inline=True
+            )
+            result_embed.add_field(
+                name='📄 Log',
+                value='`!update log 1`',
+                inline=True
+            )
+            if preparation.woken_hosts:
+                result_embed.add_field(
+                    name='🔌 Encendidos por WOL',
+                    value=', '.join(preparation.woken_hosts),
+                    inline=False,
+                )
+            reporting.add_result_fields(
+                result_embed,
+                packages,
+                hosts=automatic_hosts(),
+                skipped_hosts=preparation.skipped_hosts,
+            )
+            await msg.edit(embed=result_embed)
+        except Exception as exc:
+            if msg:
+                await msg.edit(embed=discord.Embed(
+                    title='❌ Falló la preparación del update diario',
+                    description=f'`{type(exc).__name__}: {str(exc)[:800]}`',
+                    color=0xe74c3c,
+                    timestamp=datetime.now(),
+                ))
+        finally:
+            try:
+                if preparation:
+                    release_warnings = await release_maintenance(preparation.held_wol_keys)
+            finally:
+                self.runner.release()
+            if release_warnings:
+                await channel.send(embed=discord.Embed(
+                    title='⚠️ Reservas de mantenimiento con liberación pendiente',
+                    description='\n'.join(release_warnings)[:4000],
+                    color=0xf1c40f,
+                    timestamp=datetime.now(),
+                ))

@@ -10,6 +10,7 @@ A Discord bot that orchestrates system updates across multiple homelab servers v
 - **Live progress embeds:** updates the Discord message in real time while the playbook runs, instead of only reporting on completion.
 - **Per-run logs:** saves an independent log for each run for later auditing.
 - **Phased update detection:** supports Ubuntu's phased update rollout system, avoiding false negatives when a package hasn't yet been released to a given machine.
+- **WOL-aware daily orchestration:** before the 12:00 sweep, asks WOL-Bot to reserve and wake the NAS/homeserver with bounded retries, waits for Ansible readiness, and safely skips only the host that never came back.
 
 ## 🧰 Stack
 
@@ -36,6 +37,18 @@ python main.py
 See `.env.example` — bot token, reporting channel, and update schedule.
 
 See `ansible/inventory/hosts.ini.example` — the Ansible inventory: your Arch/Ubuntu/Debian hosts, plus the Proxmox VM/LXC groups, SSH user, port, and private key path.
+
+### Daily WOL flow
+
+The automatic `all` run coordinates with the local WOL-Bot CLI:
+
+1. Acquire an expiring maintenance lease for `media` and `nas`; WOL-Bot postpones scheduled shutdown while it is active.
+2. If a host is offline, send up to three WOL attempts and wait for boot.
+3. Confirm the operating system through Ansible `wait_for_connection`.
+4. Run `update_all.yml` with an Ansible `--limit` containing only ready hosts.
+5. Release both leases in a `finally` block. If this bot crashes, their TTL still expires automatically.
+
+Proxmox guests remain manual-only and never enter this WOL flow.
 
 ## ➕ Adding a host
 
