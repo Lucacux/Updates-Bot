@@ -50,9 +50,15 @@ class UpdateTasks(commands.Cog):
             embed.add_field(name='Imágenes Docker', value=(
                 '`!docker status` — imágenes con actualización disponible\n'
                 '`!docker show <id>` — CVEs y riesgo de una propuesta\n'
-                '`!docker apply <id>` — aprobar (con rollback automático)\n'
-                '`!docker history` — quién aprobó qué y cómo terminó\n'
-                '`!docker log <n>` — transcripción completa de una corrida'
+                '`!docker fix` — aplicar en lote lo de riesgo bajo\n'
+                '`!docker apply <id>` — aprobar una sola\n'
+                '`!docker history` / `!docker log <n>` — qué se hizo y con qué salida'
+            ), inline=False)
+            embed.add_field(name='Vulnerabilidades', value=(
+                '`!cve status` — qué se puede arreglar, por host\n'
+                '`!cve host <nombre>` — dónde se concentra el problema\n'
+                '`!cve images` — imágenes con CVEs, con y sin parche\n'
+                '`!cve scan` — reescanear ahora'
             ), inline=False)
             embed.add_field(
                 name='⏰ Update automático',

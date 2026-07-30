@@ -24,16 +24,15 @@ registro incluye los intentos **rechazados**, que son los que más se extrañan
 después: "¿por qué esto sigue desactualizado?" se contesta con un rechazo
 guardado, no con la ausencia de un éxito.
 """
-import asyncio
 import io
 import json
-import subprocess
 from datetime import datetime
 
 import discord
 from discord.ext import commands
 
 import config
+import remote
 
 # Colores por veredicto — mismos códigos que usa el resto del bot.
 _VERDICT_COLOR = {
@@ -101,22 +100,8 @@ def _fmt_delta(delta):
     return ' '.join(parts) if parts else 'sin cambios en C/H'
 
 
-async def _ansible_shell(host, command, timeout=900):
-    """Corre un comando en `host` por Ansible y devuelve (ok, salida).
-
-    Ansible ad-hoc contesta `host | SUCCESS | rc=0 >>` y después el stdout real;
-    nos quedamos con lo que viene después del `>>`, igual que playbooks.py.
-    """
-    try:
-        result = await asyncio.to_thread(
-            subprocess.run,
-            ['ansible', host, '-m', 'shell', '-a', command],
-            capture_output=True, text=True, cwd=config.ANSIBLE_DIR, timeout=timeout,
-        )
-    except subprocess.TimeoutExpired:
-        return False, f'timeout de {timeout}s esperando a {host}'
-    out = result.stdout.split('>>', 1)[1].strip() if '>>' in result.stdout else result.stdout.strip()
-    return result.returncode == 0, out or result.stderr.strip()
+# Vive en remote.py porque `!cve` lee los suyos por el mismo camino.
+_ansible_shell = remote.ansible_shell
 
 
 class DockerUpdates(commands.Cog):
@@ -345,6 +330,106 @@ class DockerUpdates(commands.Cog):
         )
         if ok:
             result.set_footer(text='Corré !docker scan para recalcular el análisis.')
+        await msg.edit(embed=result)
+
+    @docker_group.command(name='fix')
+    async def docker_fix(self, ctx, confirm: str = ''):
+        """Aplica en lote todo lo verde: riesgo bajo y que cierre Critical/High.
+
+        Deliberadamente no toca las amarillas. Una propuesta `apply-with-care`
+        cierra CVEs igual, pero suele ser un contenedor con datos persistentes
+        donde el rollback restaura la imagen y no lo que la versión nueva ya
+        escribió en el volumen. Esas se aprueban de a una, a propósito.
+        """
+        if self._applying:
+            return await ctx.send('⚠️ Ya hay una actualización en curso. Esperá a que termine.')
+
+        proposals, errors = await self._load_all()
+        green = [p for p in proposals
+                 if p['verdict']['action'] == 'apply' and p['actionable']
+                 and p['risk']['tier'] == 'low'
+                 and ((p['cve'].get('delta') or {}).get('critical', 0) < 0
+                      or (p['cve'].get('delta') or {}).get('high', 0) < 0)]
+        green_ids = {p['id'] for p in green}
+        rest = [p for p in proposals
+                if p['id'] not in green_ids
+                and p['verdict']['action'] in ('apply-with-care', 'plan')]
+
+        if not green:
+            embed = discord.Embed(
+                title='🐳 Nada para aplicar en lote',
+                description='No hay propuestas de riesgo bajo que cierren Critical o High.'
+                            + ('\n\nSí hay otras que requieren tu criterio:' if rest else ''),
+                color=0x95a5a6, timestamp=datetime.now())
+            for p in rest[:6]:
+                embed.add_field(
+                    name=f'🟡 `{p["id"]}` {p["container"][:40]}',
+                    value=f'{_fmt_move(p)} · CVEs {_fmt_delta(p["cve"]["delta"])}\n'
+                          f'Aprobá con `!docker apply {p["id"]}`',
+                    inline=False)
+            if errors:
+                embed.add_field(name='⚠️ Hosts sin datos', value='\n'.join(errors), inline=False)
+            return await ctx.send(embed=embed)
+
+        # Confirmación explícita: el lote toca varios servicios seguidos, así
+        # que no puede dispararse con un solo comando escrito de memoria.
+        if confirm.lower() not in ('ya', 'si', 'sí', 'yes'):
+            embed = discord.Embed(
+                title=f'🐳 Voy a aplicar {len(green)} de {len(proposals)} propuestas',
+                description='Riesgo bajo y cierran CVEs. Cada una se verifica y se '
+                            'revierte sola si el servicio no vuelve sano.\n'
+                            '**Confirmá con `!docker fix ya`**',
+                color=0x2ecc71, timestamp=datetime.now())
+            for p in green:
+                embed.add_field(
+                    name=f'✅ {p["container"][:40]} en `{p["host"]}`',
+                    value=f'{_fmt_move(p)}\nCVEs {_fmt_delta(p["cve"]["delta"])} · riesgo bajo',
+                    inline=False)
+            if rest:
+                embed.add_field(
+                    name='⏸ Quedan afuera (aprobá una por una)',
+                    value='\n'.join(f'🟡 `{p["id"]}` {p["container"][:34]} — '
+                                    f'{_fmt_delta(p["cve"]["delta"])}' for p in rest[:6]),
+                    inline=False)
+            return await ctx.send(embed=embed)
+
+        actor = _actor(ctx.author)
+        msg = await ctx.send(embed=discord.Embed(
+            title=f'🐳 Aplicando {len(green)} actualización(es)...',
+            description='\n'.join(f'⏳ {p["container"]}' for p in green),
+            color=0x3498db, timestamp=datetime.now()))
+
+        done, stopped = [], None
+        self._applying = True
+        try:
+            for p in green:
+                ok, out = await _ansible_shell(
+                    p['host'], f'apply_update.py {p["id"]} --yes --actor {actor}', timeout=1200)
+                done.append((p, ok, out))
+                if not ok:
+                    # Se corta al primer fallo: si una imagen no volvió sana, el
+                    # host ya no está en el estado que el análisis suponía, y
+                    # seguir aplicando sería decidir sobre información vieja.
+                    stopped = p
+                    break
+        finally:
+            self._applying = False
+
+        ok_count = sum(1 for _, ok, _ in done if ok)
+        result = discord.Embed(
+            title=f'🐳 {ok_count} de {len(green)} aplicadas',
+            description=('Se cortó al primer fallo: el resto quedó sin tocar.'
+                         if stopped else 'Todas verificadas y sanas.'),
+            color=0x2ecc71 if not stopped else 0xe67e22,
+            timestamp=datetime.now())
+        for p, ok, out in done:
+            icon = '✅' if ok else ('↩️' if 'rollback' in out.lower() else '❌')
+            result.add_field(
+                name=f'{icon} {p["container"][:40]}',
+                value=f'{_fmt_move(p)}\n' + ('CVEs ' + _fmt_delta(p['cve']['delta'])
+                                             if ok else f'```{out[-300:]}```'),
+                inline=False)
+        result.set_footer(text='Detalle en !docker history · recalculá con !docker scan')
         await msg.edit(embed=result)
 
     @docker_group.command(name='history')
