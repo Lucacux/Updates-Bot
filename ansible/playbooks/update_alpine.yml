@@ -1,0 +1,12 @@
+---
+- name: Update Alpine LXC
+  hosts: lxc_alpine
+  become: false
+  tasks:
+    - name: Actualizar paquetes con apk
+      # OJO: en community.general.apk `upgrade` es BOOLEANO, no string. Poner
+      # `upgrade: latest` (sintaxis del módulo apt) hace fallar la tarea con
+      # "unable to convert to bool".
+      community.general.apk:
+        update_cache: yes
+        upgrade: true

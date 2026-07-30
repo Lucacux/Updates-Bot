@@ -25,6 +25,7 @@ cd Updates-Bot
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
+ansible-galaxy collection install -r ansible/requirements.yml
 cp .env.example .env  # fill in your real values
 cp ansible/inventory/hosts.ini.example ansible/inventory/hosts.ini  # fill in your real hosts
 python main.py
@@ -34,7 +35,18 @@ python main.py
 
 See `.env.example` — bot token, reporting channel, and update schedule.
 
-See `ansible/inventory/hosts.ini.example` — the Ansible inventory: your Arch/Ubuntu hosts, SSH user, port, and private key path.
+See `ansible/inventory/hosts.ini.example` — the Ansible inventory: your Arch/Ubuntu/Debian hosts, plus the Proxmox VM/LXC groups, SSH user, port, and private key path.
+
+## ➕ Adding a host
+
+Package-manager support (`flavor` in `config.py`) is a small dict entry in `playbooks.py` (`_CHECK`) — `pacman`/`apt`/`apk` today, more can be added the same way. Registering a host is always one `Host(...)` entry in `config.py` plus one inventory line, no other code change. Two recipes, pick based on how safe unattended updates are for that host:
+
+1. **Fine to sweep automatically** (a general-purpose box you don't mind rebooting on the daily schedule): reuse an existing `target` (`arch`/`ubuntu`/`debian`) and add the host to that same inventory group. It rides along with `!update run <target>`, `!update run all`, and the daily auto-update.
+2. **Sensitive — must never update unattended** (e.g. a VM/LXC something else depends on, like a monitoring stack): give it its own `target` with its own playbook/inventory group, and don't reference that group from `update_all.yml`. It only updates via an explicit `!update run <target>`.
+
+LXCs on Proxmox without their own SSH server are reached via `community.proxmox.proxmox_pct_remote` (SSH to the Proxmox host + `pct exec`) — see the `[lxc_alpine]` example in `hosts.ini.example`.
+
+Manual-only targets that live on the same Proxmox host can be grouped into a composite target (`config.MANUAL_ONLY_TARGETS` + `update_proxmox_all.yml`) so `!update run proxmox` updates all of them in one command, while each still works individually via its own `!update run <target>`. The composite is never referenced from `update_all.yml` either — grouping doesn't change whether something is safe to sweep automatically.
 
 ## 📄 License
 

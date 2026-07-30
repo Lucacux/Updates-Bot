@@ -9,7 +9,23 @@ your-ubuntu-host ansible_host=192.168.x.x ansible_user=youruser ansible_ssh_priv
 [debian]
 sempron ansible_host=192.168.2.20 ansible_user=youruser ansible_ssh_private_key_file=~/.ssh/id_ed25519_ansible ansible_port=22
 
+# VM Debian en Proxmox (grupo propio 'proxmox_debian': manual-only, no la toca
+# `update_all.yml` ni el cron diario — ver config.py). Ojo: los nombres de GRUPO
+# van con guion_bajo (Ansible avisa "Invalid characters were found in group
+# names" con guion medio, y ese warning termina en los embeds de Discord). El
+# `target` de config.py es independiente y sí lleva guion medio: 'proxmox-debian'.
+[proxmox_debian]
+debian-monitoring ansible_host=192.168.1.60 ansible_user=youruser ansible_ssh_private_key_file=~/.ssh/id_ed25519_ansible ansible_port=22
+
+# LXC Alpine SIN SSH propio: Ansible entra por SSH al HOST Proxmox y ejecuta
+# `pct exec <vmid>` (community.proxmox.proxmox_pct_remote). ansible_host es
+# la IP del host Proxmox, NO la del LXC. proxmox_vmid es el ID del contenedor.
+[lxc_alpine]
+alpine-monitoring ansible_host=192.168.1.70 ansible_user=ansible-pct ansible_ssh_private_key_file=~/.ssh/id_ed25519_ansible ansible_port=22 ansible_connection=community.proxmox.proxmox_pct_remote proxmox_vmid=101
+
 [servers:children]
 arch
 ubuntu
 debian
+proxmox_debian
+lxc_alpine
