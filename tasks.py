@@ -47,6 +47,20 @@ class UpdateTasks(commands.Cog):
                 '`!update log <id>` — ver log de un update\n'
                 '`!update next` — próximo update automático'
             ), inline=False)
+            # Grupo aparte: el SO se actualiza solo, las imágenes las aprobás vos.
+            embed.add_field(name='Imágenes Docker', value=(
+                '`!docker status` — imágenes con actualización disponible\n'
+                '`!docker show <id>` — CVEs y riesgo de una propuesta\n'
+                '`!docker fix` — aplicar en lote lo de riesgo bajo\n'
+                '`!docker apply <id>` — aprobar una sola\n'
+                '`!docker history` / `!docker log <n>` — qué se hizo y con qué salida'
+            ), inline=False)
+            embed.add_field(name='Vulnerabilidades', value=(
+                '`!cve status` — qué se puede arreglar, por host\n'
+                '`!cve host <nombre>` — dónde se concentra el problema\n'
+                '`!cve images` — imágenes con CVEs, con y sin parche\n'
+                '`!cve scan` — reescanear ahora'
+            ), inline=False)
             embed.add_field(
                 name='⏰ Update automático',
                 value=f'Todos los días a las {config.UPDATE_HOUR:02d}:00',

@@ -61,6 +61,45 @@ HISTORY_FILE = os.path.expanduser('~/discord-bot-updates/history.json')
 LOGS_DIR = os.path.expanduser('~/discord-bot-updates/logs')
 os.makedirs(LOGS_DIR, exist_ok=True)
 
+# ── Imágenes Docker (grupo `!docker`) ──────────────────────────────────
+# Hosts de la flota que corren Docker y tienen instalado el image_advisor de
+# Vuln-Sentinel. Son nombres del inventario Ansible, igual que HOSTS: el bot
+# lee y aplica por el mismo canal que ya usa para todo lo demás.
+#
+# No es un campo de Host porque son ejes distintos: `HOSTS` es "a quién le
+# actualizo los paquetes del SO" (automático, diario) y esto es "quién tiene
+# imágenes que revisar" (siempre con aprobación humana). sempron no corre
+# Docker; debian-monitoring y alpine-monitoring tampoco.
+DOCKER_HOSTS = ['server-mbp', 'pentium']
+ADVISOR_STATE_DIR = '/var/lib/vuln-sentinel'
+ADVISOR_PROPOSALS = f'{ADVISOR_STATE_DIR}/proposals.json'
+# Trazabilidad: historial de aplicaciones + transcripciones completas de cada
+# corrida. Los escribe `apply_update.py` en el host; el bot solo los lee.
+# Separados de HISTORY_FILE (el de `!update`) a propósito: son ciclos de vida
+# distintos, y este guarda 200 entradas contra las 20 del historial del SO.
+ADVISOR_HISTORY = f'{ADVISOR_STATE_DIR}/apply-history.json'
+ADVISOR_LOGS_DIR = f'{ADVISOR_STATE_DIR}/logs'
+
+# ── CVEs (grupo `!cve`) ────────────────────────────────────────────────
+# Vuln-Sentinel escribe sus métricas al textfile collector de node_exporter en
+# cada host. El bot lee ESE archivo, no Prometheus: es la fuente original, sigue
+# funcionando si Grafana o Prometheus están caídos, y usa el mismo camino de
+# Ansible que ya existe en vez de otra regla de firewall cross-VLAN.
+#
+# La lista es aparte de DOCKER_HOSTS y de HOSTS porque son preguntas distintas:
+# acá es "quién tiene escáner de CVEs instalado". sempron entra aunque esté
+# apagado casi siempre — cuando prende, tiene datos.
+CVE_HOSTS = ['server-mbp', 'pentium', 'sempron', 'debian-monitoring']
+CVE_METRICS = '/var/lib/node-exporter-textfile/cve_exporter.prom'
+# Un escaneo más viejo que esto ya no describe el estado actual del host.
+CVE_STALE_HOURS = 48
+# Cada cuánto se busca algo accionable nuevo. Alineado con el timer del
+# cve-exporter (6h): chequear más seguido solo releería el mismo archivo.
+CVE_ALERT_EVERY_HOURS = 6
+# Qué se avisó ya. Sin este archivo el aviso se repetiría en cada ciclo y
+# dejarías de leerlo, que es la única forma de que un aviso falle.
+CVE_ALERT_STATE = os.path.expanduser('~/discord-bot-updates/cve-alerts.json')
+
 
 # ── Registro de hosts ──────────────────────────────────────────────────
 @dataclass(frozen=True)
@@ -163,6 +202,9 @@ ALL_PLAYBOOK = 'update_all.yml'
 
 # ── Mapas derivados (robustos a varios hosts por target) ───────────────
 HOST_BY_KEY = {h.pkg_key: h for h in HOSTS}
+# Por nombre de inventario, que es como los nombra `!cve` (viene del .prom del
+# host, no del registro de paquetes).
+HOST_BY_NAME = {h.name: h for h in HOSTS}
 # Orden de targets preservando aparición, sin duplicados.
 TARGET_KEYS = list(dict.fromkeys(h.target for h in HOSTS))
 

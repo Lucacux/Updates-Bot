@@ -10,6 +10,8 @@ from discord.ext import commands
 import config
 from playbooks import PlaybookRunner
 from commands import UpdateCommands
+from docker_updates import DockerUpdates
+from cve import CVE
 from tasks import UpdateTasks
 
 
@@ -24,6 +26,8 @@ def build_bot():
     @bot.event
     async def setup_hook():
         await bot.add_cog(UpdateCommands(bot, runner))
+        await bot.add_cog(DockerUpdates(bot))
+        await bot.add_cog(CVE(bot))
         await bot.add_cog(UpdateTasks(bot, runner))
 
     return bot
