@@ -32,6 +32,19 @@ HISTORY_FILE = os.path.expanduser('~/discord-bot-updates/history.json')
 LOGS_DIR = os.path.expanduser('~/discord-bot-updates/logs')
 os.makedirs(LOGS_DIR, exist_ok=True)
 
+# ── Imágenes Docker (grupo `!docker`) ──────────────────────────────────
+# Hosts de la flota que corren Docker y tienen instalado el image_advisor de
+# Vuln-Sentinel. Son nombres del inventario Ansible, igual que HOSTS: el bot
+# lee y aplica por el mismo canal que ya usa para todo lo demás.
+#
+# No es un campo de Host porque son ejes distintos: `HOSTS` es "a quién le
+# actualizo los paquetes del SO" (automático, diario) y esto es "quién tiene
+# imágenes que revisar" (siempre con aprobación humana). sempron no corre
+# Docker; debian-monitoring y alpine-monitoring tampoco.
+DOCKER_HOSTS = ['server-mbp', 'pentium']
+ADVISOR_STATE_DIR = '/var/lib/vuln-sentinel'
+ADVISOR_PROPOSALS = f'{ADVISOR_STATE_DIR}/proposals.json'
+
 
 # ── Registro de hosts ──────────────────────────────────────────────────
 @dataclass(frozen=True)
