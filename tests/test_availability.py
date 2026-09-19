@@ -40,7 +40,10 @@ class AvailabilityTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             set(result.ready_hosts),
-            {"server-mbp", "pve", "debian-monitoring", "alpine-monitoring", "pentium"},
+            {
+                "server-mbp", "pve", "debian-monitoring", "alpine-monitoring",
+                "tailscale-alpine", "pentium",
+            },
         )
         self.assertIn("sempron", result.skipped_hosts)
         self.assertEqual(set(result.held_wol_keys), {"media", "nas"})

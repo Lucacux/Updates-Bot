@@ -1,0 +1,17 @@
+---
+# VM Alpine (vmid 103, gateway Tailscale). Es una VM y no un LXC, así que tiene
+# sshd propio: se llega por SSH normal, con ProxyJump por el hypervisor porque
+# el firewall entre VLANs no deja pasar al controller directo (ver inventario).
+#
+# `become: true` al revés que en el LXC: acá el usuario remoto no es root ni
+# corre nada por `pct`, es una máquina más de la flota.
+- name: Update Alpine VM
+  hosts: alpine_vm
+  become: true
+  tasks:
+    - name: Actualizar paquetes con apk
+      # OJO: en community.general.apk `upgrade` es BOOLEANO, no string (misma
+      # trampa que en update_alpine.yml).
+      community.general.apk:
+        update_cache: yes
+        upgrade: true

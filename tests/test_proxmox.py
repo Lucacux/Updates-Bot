@@ -20,7 +20,7 @@ from playbooks import _parse_pct_list, check_unregistered_lxc, parse_reboot_requ
 class ProxmoxInSweepTests(unittest.TestCase):
     def test_hypervisor_and_guests_are_automatic(self):
         automatic = {h.name for h in automatic_hosts()}
-        for host in ("pve", "debian-monitoring", "alpine-monitoring"):
+        for host in ("pve", "debian-monitoring", "alpine-monitoring", "tailscale-alpine"):
             self.assertIn(host, automatic)
 
     def test_no_manual_only_targets_left(self):
@@ -35,8 +35,12 @@ class ProxmoxInSweepTests(unittest.TestCase):
     def test_composite_proxmox_target_covers_the_whole_machine(self):
         self.assertEqual(
             config.TARGETS_STR["proxmox"],
-            "pve + debian-monitoring + alpine-monitoring",
+            "pve + debian-monitoring + alpine-monitoring + tailscale-alpine",
         )
+
+    def test_only_lxc_guests_count_for_the_pct_list_comparison(self):
+        """La VM 103 tiene vmid pero no es un contenedor: no va al registro."""
+        self.assertEqual(config.REGISTERED_LXC_VMIDS, {101: "alpine-monitoring"})
 
 
 class RebootRequiredTests(unittest.TestCase):

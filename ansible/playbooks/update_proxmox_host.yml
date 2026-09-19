@@ -5,9 +5,11 @@
 # corriendo indefinidamente en silencio.
 - name: Update Proxmox host
   hosts: proxmox_host
-  # ansible_user ya es root (ver inventario): become sobraría y encima rompe
-  # si algún día el host queda sin sudo instalado.
-  become: false
+  # Entra como el usuario `ansible` del hypervisor, no como root (ver
+  # inventario), así que hace falta become. Ese sudoers es `NOPASSWD: ALL` y no
+  # se puede acotar: el módulo apt corre un intérprete Python completo del otro
+  # lado, no el binario apt. El usuario acotado de verdad es el de los LXC.
+  become: true
   tasks:
     - name: Actualizar paquetes con apt
       apt:

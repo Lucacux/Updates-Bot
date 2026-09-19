@@ -9,3 +9,4 @@
 - import_playbook: update_proxmox_host.yml
 - import_playbook: update_proxmox_debian.yml
 - import_playbook: update_alpine.yml
+- import_playbook: update_alpine_vm.yml

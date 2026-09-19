@@ -10,15 +10,16 @@ your-ubuntu-host ansible_host=192.168.x.x ansible_user=youruser ansible_ssh_priv
 sempron ansible_host=192.168.2.20 ansible_user=youruser ansible_ssh_private_key_file=~/.ssh/id_ed25519_ansible ansible_port=22
 
 # ── Proxmox ────────────────────────────────────────────────────────────
-# El HYPERVISOR, no un guest. Va como root: `pct`, `apt` y `pveversion` piden
-# root, y un sudoers acotado a esos binarios no alcanza porque el módulo apt
-# de Ansible corre un intérprete Python completo del otro lado. Por eso
-# `become: false` en los playbooks que lo apuntan.
-# En el PVE, el acceso debe quedar keys-only (`PermitRootLogin prohibit-password`
-# + `PasswordAuthentication no`): es root por SSH sobre la máquina que aloja
-# todo lo demás.
+# El HYPERVISOR, no un guest. Nadie entra como root por SSH acá, igual que en
+# el resto de la flota: usuario propio `ansible` + `become: true`. El sudoers
+# de ese usuario sí es `NOPASSWD: ALL` y no se puede acotar más — el módulo
+# apt de Ansible corre un intérprete Python completo del otro lado (AnsiballZ),
+# así que limitar sudo a `/usr/bin/apt` no alcanza. Lo que se gana igual es
+# poder cerrar el login de root (`PermitRootLogin no`) y tener traza de sudo.
+#
+# El usuario acotado de verdad es el de los LXC, más abajo.
 [proxmox_host]
-pve ansible_host=192.168.1.70 ansible_user=root ansible_ssh_private_key_file=~/.ssh/id_ed25519_ansible ansible_port=22
+pve ansible_host=192.168.1.70 ansible_user=ansible ansible_ssh_private_key_file=~/.ssh/id_ed25519_ansible ansible_port=22
 
 # VM Debian en Proxmox (vmid 100), grupo propio 'proxmox_debian'. Ojo: los
 # nombres de GRUPO van con guion_bajo (Ansible avisa "Invalid characters were
@@ -32,19 +33,31 @@ debian-monitoring ansible_host=192.168.1.60 ansible_user=youruser ansible_ssh_pr
 # `pct exec <vmid>` (community.proxmox.proxmox_pct_remote). ansible_host es
 # la IP del host Proxmox, NO la del LXC. proxmox_vmid es el ID del contenedor.
 #
-# ansible_user TIENE que ser un usuario que pueda correr `pct` sin sudo — root
-# en la práctica. El plugin es paramiko y, cuando el usuario remoto no existe,
-# el error que devuelve es "Private key file is encrypted": mentira, la key
-# está bien, lo que falló es la autenticación. Si ves eso, verificá primero que
-# el usuario exista en el host Proxmox.
+# Usuario `ansible-pct`, NO root: el plugin detecta que el usuario remoto no es
+# root y antepone `sudo` al `pct exec`, así que alcanza con un sudoers de una
+# línea acotado a ese binario:
+#
+#   ansible-pct ALL = (root) NOPASSWD: /usr/sbin/pct
+#
+# Acá el acotado es real, al revés que en el host: el módulo de Ansible corre
+# *adentro* del contenedor vía `pct exec`, no en el hypervisor, así que lo único
+# que pasa por sudo es ese binario fijo.
+#
+# ⚠️ Cuando el usuario remoto NO existe, el plugin (paramiko) devuelve
+# "Private key file is encrypted". Es mentira: la key está bien, lo que falló es
+# la autenticación. Si ves eso, verificá primero `getent passwd` en el host.
 [lxc_alpine]
-alpine-monitoring ansible_host=192.168.1.70 ansible_user=root ansible_ssh_private_key_file=~/.ssh/id_ed25519_ansible ansible_port=22 ansible_connection=community.proxmox.proxmox_pct_remote proxmox_vmid=101
+alpine-monitoring ansible_host=192.168.1.70 ansible_user=ansible-pct ansible_ssh_private_key_file=~/.ssh/id_ed25519_ansible ansible_port=22 ansible_connection=community.proxmox.proxmox_pct_remote proxmox_vmid=101
 
-# VM Alpine que el controller NO alcanza directo (firewall entre VLANs). Se
-# llega saltando por el hypervisor, sin abrir nada en el router. Descomentar
-# cuando la VM tenga la key de Ansible y una lease fija:
-# [alpine_vm]
-# tailscale-alpine ansible_host=192.168.1.209 ansible_user=luca ansible_ssh_private_key_file=~/.ssh/id_ed25519_ansible ansible_port=22 ansible_ssh_common_args='-o ProxyJump=root@192.168.1.70'
+# VM Alpine que el controller NO alcanza directo: el firewall entre VLANs sólo
+# deja pasar 192.168.2.40 → .1.60 y .1.70. Se llega saltando por el hypervisor
+# con ProxyJump, sin abrir nada en el router.
+#
+# `ansible_host` va por NOMBRE y no por IP a propósito: la VM está en DHCP, y
+# con ProxyJump el nombre lo resuelve el HOST DEL SALTO, que usa el OpenWRT
+# como DNS y sí lo conoce. Así no hace falta lease fija.
+[alpine_vm]
+tailscale-alpine ansible_host=tailscale-alpine.lan ansible_user=luca ansible_ssh_private_key_file=~/.ssh/id_ed25519_ansible ansible_port=22 ansible_ssh_common_args='-o ProxyJump=ansible@192.168.1.70'
 
 [servers:children]
 arch
@@ -53,3 +66,4 @@ debian
 proxmox_host
 proxmox_debian
 lxc_alpine
+alpine_vm

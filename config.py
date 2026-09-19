@@ -174,9 +174,10 @@ HOSTS = [
     # barrido diario como uno más, pero nunca se reinicia solo: un reboot acá
     # se lleva puestos TODOS los guests. El playbook detecta el kernel nuevo
     # sin bootear y el bot lo avisa en el embed (ver `parse_reboot_required`).
-    # Ansible entra como root por SSH con key: `pct`, `apt` y `pveversion`
-    # piden root, y un sudoers acotado no alcanza porque el módulo apt corre
-    # un intérprete Python completo del otro lado.
+    # Nadie entra como root por SSH acá, igual que en el resto de la flota:
+    # usuario `ansible` + become. Ese sudoers es `NOPASSWD: ALL` y no se puede
+    # acotar — el módulo apt corre un intérprete Python completo del otro lado,
+    # no el binario apt. El usuario acotado de verdad es el de los LXC.
     Host(
         name='pve', short='pve', flavor='apt',
         pkg_key='proxmox-host', target='proxmox-host',
@@ -195,25 +196,27 @@ HOSTS = [
     # alpine-monitoring — LXC Alpine (vmid 101) en el mismo Proxmox, sin SSH
     # propio por diseño: Ansible llega vía `community.proxmox.proxmox_pct_remote`
     # (SSH al host Proxmox + `pct exec`), ver ansible/inventory/hosts.ini.example.
+    # Entra como `ansible-pct`, con sudoers acotado a `/usr/sbin/pct` y nada
+    # más: el plugin ve que el usuario remoto no es root y antepone `sudo`. Acá
+    # el acotado sirve de verdad porque el módulo corre adentro del contenedor.
     Host(
         name='alpine-monitoring', short='alpine', flavor='apk',
         pkg_key='alpine-monitoring', target='lxc-alpine',
         playbook='update_alpine.yml', play_marker='PLAY [Update Alpine',
         proxmox_vmid=101, proxmox_kind='lxc',
     ),
-    # ── Pendiente: tailscale-alpine (VM 103) ────────────────────────────
-    # Gateway Tailscale, Alpine 3.24. NO está registrado todavía porque el
-    # controller no lo alcanza: el firewall entre VLANs solo deja pasar
-    # 192.168.2.40 → .60 y .70, y la VM además no tiene la key de Ansible ni
-    # lease fija (DHCP, hoy 192.168.1.209). Cuando se resuelva va así, sin
-    # abrir nada en el router, saltando por el hypervisor:
-    #   inventario: ansible_host=192.168.1.209 ansible_user=luca
-    #               ansible_ssh_common_args='-o ProxyJump=root@192.168.1.70'
-    #   Host(name='tailscale-alpine', short='tailscale', flavor='apk',
-    #        pkg_key='tailscale-vm', target='alpine-vm',
-    #        playbook='update_alpine_vm.yml',
-    #        play_marker='PLAY [Update Alpine VM',
-    #        proxmox_vmid=103, proxmox_kind='vm'),
+    # tailscale-alpine — VM Alpine (vmid 103), gateway Tailscale. El controller
+    # NO la alcanza directo: el firewall entre VLANs sólo deja pasar
+    # 192.168.2.40 → .1.60 y .1.70. Se llega con ProxyJump por el hypervisor,
+    # sin abrir nada en el router, y por NOMBRE en vez de IP porque está en
+    # DHCP: con ProxyJump el nombre lo resuelve el host del salto, que usa el
+    # OpenWRT como DNS. Ver el bloque `[alpine_vm]` del inventario.
+    Host(
+        name='tailscale-alpine', short='tailscale', flavor='apk',
+        pkg_key='tailscale-vm', target='alpine-vm',
+        playbook='update_alpine_vm.yml', play_marker='PLAY [Update Alpine VM',
+        proxmox_vmid=103, proxmox_kind='vm',
+    ),
     # ── Cómo sumar el próximo host ──────────────────────────────────────
     # Dos recetas según qué tan seguro sea auto-actualizarlo sin supervisión:
     #
@@ -263,7 +266,7 @@ MANUAL_ONLY_TARGETS: frozenset[str] = frozenset()
 
 # Targets que viven adentro del Proxmox. Definen qué agrupa el target compuesto
 # `proxmox`; ya no implican "manual-only".
-PROXMOX_TARGETS = ('proxmox-host', 'proxmox-debian', 'lxc-alpine')
+PROXMOX_TARGETS = ('proxmox-host', 'proxmox-debian', 'lxc-alpine', 'alpine-vm')
 
 PLAYBOOKS = {'all': ALL_PLAYBOOK, **{t: _hosts_for(t)[0].playbook for t in TARGET_KEYS}}
 TARGETS_STR = {
