@@ -67,6 +67,8 @@ LXCs on Proxmox without their own SSH server are reached via `community.proxmox.
 ansible-pct ALL = (root) NOPASSWD: /usr/sbin/pct exec 101 -- *
 ```
 
+`scripts/setup-proxmox-access.sh` creates both accounts with exactly these rules (and closes password SSH on the hypervisor while it's there).
+
 Scoping to the binary alone (`NOPASSWD: /usr/sbin/pct`) would be root-equivalent and is a trap worth spelling out: `pct` also exposes `create`, `restore`, `set`, `mount`, `push`, `pull`, `clone`, `console` and `enter`. `pct pull` copies *out of* a container onto the host as root, and whoever holds `pct exec` controls what's in the container — which is arbitrary root-owned file writes anywhere on the hypervisor, no template or privileged container required. With the subcommand pinned, the wildcard is safe: everything after `--` runs *inside* the container and can't turn into a different `pct` subcommand.
 
 The hypervisor's own updates are the case that can't be scoped — the `apt` module ships a full Python interpreter (AnsiballZ) rather than invoking `apt`, so that user needs `NOPASSWD: ALL`. It still isn't root over SSH, which keeps `PermitRootLogin no` on the table and leaves a sudo trail.
