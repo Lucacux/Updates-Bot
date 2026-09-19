@@ -1,0 +1,39 @@
+---
+# El hypervisor. Nunca se reinicia solo: un reboot acá se lleva puestos todos
+# los guests. Lo que sí hace es dejar dicho que quedó un kernel sin bootear,
+# para que el bot lo avise en Discord en vez de que el kernel viejo siga
+# corriendo indefinidamente en silencio.
+- name: Update Proxmox host
+  hosts: proxmox_host
+  # ansible_user ya es root (ver inventario): become sobraría y encima rompe
+  # si algún día el host queda sin sudo instalado.
+  become: false
+  tasks:
+    - name: Actualizar paquetes con apt
+      apt:
+        update_cache: yes
+        upgrade: dist
+        # `autoremove: no` a propósito, al revés que en el resto de la flota:
+        # acá lo que sobra son kernels viejos, y son justo el plan B para
+        # bootear si el nuevo no levanta. Se limpian a mano cuando /boot
+        # aprieta (`proxmox-boot-tool kernel list`).
+        autoremove: no
+
+    - name: Detectar si quedó un kernel sin bootear
+      # Proxmox no trae update-notifier, así que /var/run/reboot-required
+      # normalmente no existe: el chequeo que sí vale es comparar el kernel
+      # corriendo contra el más nuevo instalado en /boot.
+      # El bot busca REBOOT_REQUIRED en el `stdout` de esta tarea (no en el
+      # `cmd`, que también lo contiene) — ver parse_reboot_required().
+      ansible.builtin.shell: |
+        if [ -f /var/run/reboot-required ]; then
+          echo REBOOT_REQUIRED
+          exit 0
+        fi
+        newest=$(ls -1 /boot/vmlinuz-* 2>/dev/null | sed 's|.*/vmlinuz-||' | sort -V | tail -n1)
+        if [ -n "$newest" ] && [ "$newest" != "$(uname -r)" ]; then
+          echo REBOOT_REQUIRED
+        fi
+      register: proxmox_reboot_check
+      changed_when: false
+      failed_when: false

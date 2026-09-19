@@ -1,29 +1,14 @@
 ---
-- name: Update Arch Linux
-  hosts: arch
-  become: true
-  tasks:
-    - name: Actualizar paquetes con pacman
-      pacman:
-        update_cache: yes
-        upgrade: yes
-
-- name: Update Ubuntu
-  hosts: ubuntu
-  become: true
-  tasks:
-    - name: Actualizar paquetes con apt
-      apt:
-        update_cache: yes
-        upgrade: dist
-        autoremove: yes
-
-- name: Update Debian
-  hosts: debian
-  become: true
-  tasks:
-    - name: Actualizar paquetes con apt
-      apt:
-        update_cache: yes
-        upgrade: dist
-        autoremove: yes
+# El barrido completo: lo que corre el cron diario y `!update run all`.
+# Importa los playbooks por target en vez de repetir sus plays — la definición
+# de cómo se actualiza cada grupo vive en un solo archivo.
+#
+# Los hosts concretos los recorta el bot con `--limit` sobre los que quedaron
+# listos en el preflight, así que un guest apagado no hace fallar al resto.
+- import_playbook: update_arch.yml
+- import_playbook: update_ubuntu.yml
+- import_playbook: update_debian.yml
+# Proxmox: desde 2026-09-19 el hypervisor y sus guests entran al automático.
+- import_playbook: update_proxmox_host.yml
+- import_playbook: update_proxmox_debian.yml
+- import_playbook: update_alpine.yml

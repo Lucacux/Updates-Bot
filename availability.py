@@ -1,8 +1,17 @@
 """Preflight del update diario en cooperación con WOL-Bot.
 
-Solo los hosts que declaran ``wol_key`` en config pasan por este flujo. Proxmox
-no declara ninguno y, además, sus guests son manual-only: queda fuera tanto del
-WOL como del barrido diario.
+Dos caminos según el host:
+
+- Los que declaran ``wol_key`` son físicos y pueden estar apagados: se reserva
+  la ventana de mantenimiento, se los enciende con reintentos y se espera a que
+  Ansible confirme el SO.
+- El resto (el hypervisor Proxmox y sus guests, siempre prendidos) sólo pasa
+  por un ping de Ansible. Desde que Proxmox entró al barrido diario esto no es
+  cosmético: un guest caído tiene que salir del ``--limit`` con un motivo, no
+  hacer fallar el playbook entero y reportar "update diario fallido" cuando el
+  resto de la flota se actualizó bien.
+
+En los dos casos el host que no está listo se omite; nunca frena a los demás.
 """
 from __future__ import annotations
 
@@ -95,6 +104,17 @@ async def _ensure_online(host) -> tuple[bool, bool, str]:
     return rc == 0 and bool(payload.get('ready')), woken, reason
 
 
+async def _reachable(host) -> tuple[object, bool, str]:
+    """Ping de Ansible para los hosts que no pasan por WOL."""
+    timeout = config.PREFLIGHT_PING_TIMEOUT_SECS
+    rc, out, err = await _run_process(
+        'ansible', host.name, '-m', 'ping',
+        timeout=timeout + 15,
+        cwd=config.ANSIBLE_DIR,
+    )
+    return host, rc == 0, (err or out or f'Ansible terminó con código {rc}')
+
+
 async def _ansible_ready(host) -> tuple[bool, str]:
     timeout = config.WOL_ANSIBLE_READY_TIMEOUT_SECS
     rc, out, err = await _run_process(
@@ -122,7 +142,16 @@ async def prepare_daily_fleet() -> FleetPreparation:
     """Reserva, enciende en paralelo y devuelve el límite seguro de Ansible."""
     result = FleetPreparation()
     wol_hosts = [h for h in automatic_hosts() if h.wol_key]
-    result.ready_hosts.extend(h.name for h in automatic_hosts() if not h.wol_key)
+
+    direct_hosts = [h for h in automatic_hosts() if not h.wol_key]
+    probed = await asyncio.gather(*(_reachable(host) for host in direct_hosts))
+    for host, ok, detail in probed:
+        if ok:
+            result.ready_hosts.append(host.name)
+        else:
+            result.skipped_hosts[host.name] = (
+                f'no respondió al ping de Ansible: {detail[:180]}'
+            )
 
     acquired = await asyncio.gather(*(_acquire(host) for host in wol_hosts))
     eligible = []
