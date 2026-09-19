@@ -169,7 +169,8 @@ HOSTS = [
         playbook='update_debian.yml', play_marker='PLAY [Update Debian',
         wol_key='nas',
     ),
-    # pve@192.168.1.70 — el HYPERVISOR (HP Pavilion), no un guest. Entra al
+    # pve@192.168.1.70 — el HYPERVISOR, no un guest (Ryzen 3 2200G, 16 GB; ya
+    # no es la HP Pavilion dm4, se migró el 2026-09-13). Entra al
     # barrido diario como uno más, pero nunca se reinicia solo: un reboot acá
     # se lleva puestos TODOS los guests. El playbook detecta el kernel nuevo
     # sin bootear y el bot lo avisa en el embed (ver `parse_reboot_required`).
