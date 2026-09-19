@@ -34,14 +34,25 @@ debian-monitoring ansible_host=192.168.1.60 ansible_user=youruser ansible_ssh_pr
 # la IP del host Proxmox, NO la del LXC. proxmox_vmid es el ID del contenedor.
 #
 # Usuario `ansible-pct`, NO root: el plugin detecta que el usuario remoto no es
-# root y antepone `sudo` al `pct exec`, así que alcanza con un sudoers de una
-# línea acotado a ese binario:
+# root y antepone `sudo` al `pct exec`. El sudoers de esa cuenta fija el
+# SUBCOMANDO COMPLETO, una línea por contenedor:
 #
-#   ansible-pct ALL = (root) NOPASSWD: /usr/sbin/pct
+#   ansible-pct ALL = (root) NOPASSWD: /usr/sbin/pct exec 101 -- *
 #
-# Acá el acotado es real, al revés que en el host: el módulo de Ansible corre
-# *adentro* del contenedor vía `pct exec`, no en el hypervisor, así que lo único
-# que pasa por sudo es ese binario fijo.
+# ⚠️ NO alcanza con acotar al binario (`NOPASSWD: /usr/sbin/pct`). `pct` no es
+# angosto: expone create, restore, set, mount, push, pull, clone, console y
+# enter. En particular `pct pull <vmid> <origen> <destino>` copia DEL contenedor
+# AL host como root, y el contenido del contenedor lo controla quien tenga
+# `pct exec`. O sea: escritura arbitraria de archivos root-owned en cualquier
+# ruta del hypervisor, sin template ni contenedor privilegiado de por medio.
+#
+#   sudo pct exec 101 -- sh -c 'echo "ansible-pct ALL=(ALL) NOPASSWD: ALL" >/tmp/x'
+#   sudo pct pull 101 /tmp/x /etc/sudoers.d/pwn
+#
+# Con el subcomando fijo el comodín sí es seguro: todo lo que va después de
+# `--` se ejecuta ADENTRO del contenedor, no puede volverse otro subcomando de
+# `pct`. El riesgo residual queda acotado a código arbitrario en ese LXC, que
+# es exactamente el trabajo que tiene que hacer.
 #
 # ⚠️ Cuando el usuario remoto NO existe, el plugin (paramiko) devuelve
 # "Private key file is encrypted". Es mentira: la key está bien, lo que falló es

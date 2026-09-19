@@ -14,7 +14,12 @@ os.environ.setdefault("DISCORD_CHANNEL_ID", "1")
 
 import config
 from availability import automatic_hosts
-from playbooks import _parse_pct_list, check_unregistered_lxc, parse_reboot_required
+from playbooks import (
+    _adhoc,
+    _parse_pct_list,
+    check_unregistered_lxc,
+    parse_reboot_required,
+)
 
 
 class ProxmoxInSweepTests(unittest.TestCase):
@@ -41,6 +46,26 @@ class ProxmoxInSweepTests(unittest.TestCase):
     def test_only_lxc_guests_count_for_the_pct_list_comparison(self):
         """La VM 103 tiene vmid pero no es un contenedor: no va al registro."""
         self.assertEqual(config.REGISTERED_LXC_VMIDS, {101: "alpine-monitoring"})
+
+
+class AdhocBecomeTests(unittest.TestCase):
+    """`pacman -Sy`, `apt-get update` y `pct list` piden root: sin become el
+    chequeo no falla, devuelve datos viejos o vacíos. Era el peor modo de
+    falla posible para algo cuyo trabajo es avisar."""
+
+    def test_direct_ssh_hosts_check_with_become(self):
+        self.assertIn("--become", _adhoc(config.HOST_BY_KEY["proxmox-host"], "shell", "pct list"))
+        self.assertIn("--become", _adhoc(config.HOST_BY_KEY["arch"], "shell", "pacman -Qu"))
+
+    def test_pct_remote_lxc_checks_without_become(self):
+        """Adentro del contenedor ya se corre como root, y Alpine no trae sudo."""
+        cmd = _adhoc(config.HOST_BY_KEY["alpine-monitoring"], "shell", "apk list")
+        self.assertNotIn("--become", cmd)
+        self.assertEqual(cmd[:4], ["ansible", "alpine-monitoring", "-m", "shell"])
+
+    def test_only_the_pct_remote_host_opts_out(self):
+        without = {h.name for h in config.HOSTS if not h.check_become}
+        self.assertEqual(without, {"alpine-monitoring"})
 
 
 class RebootRequiredTests(unittest.TestCase):
@@ -77,6 +102,15 @@ class UnregisteredLxcTests(unittest.IsolatedAsyncioTestCase):
             _parse_pct_list(self.PCT_LIST),
             [(101, "alpine-monitoring"), (104, "lxc-nuevo")],
         )
+
+    async def test_the_pct_list_check_runs_with_become(self):
+        """Sin become `pct list` devuelve `ipcc_send_rec failed` y rc != 0."""
+        with patch("playbooks.asyncio.to_thread") as to_thread:
+            to_thread.return_value = type(
+                "Result", (), {"returncode": 0, "stdout": f">> {self.PCT_LIST}"}
+            )()
+            await check_unregistered_lxc()
+        self.assertIn("--become", to_thread.call_args[0][1])
 
     async def test_flags_the_container_nobody_registered(self):
         with patch("playbooks.asyncio.to_thread") as to_thread:

@@ -40,6 +40,20 @@ def _parse_apk_pending(raw):
     return [l.split()[0] for l in raw.splitlines() if '[upgradable from:' in l]
 
 
+def _adhoc(host, module, args):
+    """Comando `ansible` ad-hoc contra UN host, con become si hace falta.
+
+    Sin become, `pacman -Sy`, `apt-get update` y `pct list` fallan por permisos
+    y el error se pierde: el chequeo devuelve un caché viejo o una lista vacía
+    en vez de romper. Se subreportaba en silencio, que es el peor modo de falla
+    para algo cuyo trabajo es avisar.
+    """
+    cmd = ['ansible', host.name, '-m', module, '-a', args]
+    if host.check_become:
+        cmd.append('--become')
+    return cmd
+
+
 _CHECK = {
     'pacman': {
         'shell': 'pacman -Sy --noconfirm -q 2>/dev/null; '
@@ -73,7 +87,7 @@ async def check_pending_updates():
             # en el primer bloque `>>`.
             result = await asyncio.to_thread(
                 subprocess.run,
-                ['ansible', host.name, '-m', 'shell', '-a', strat['shell']],
+                _adhoc(host, 'shell', strat['shell']),
                 capture_output=True, text=True, cwd=config.ANSIBLE_DIR
             )
             if '>>' in result.stdout:
@@ -123,6 +137,10 @@ async def check_unregistered_lxc():
     [(vmid, nombre)]; lista vacía también cuando el chequeo no se pudo hacer
     (no hay host Proxmox registrado, o Ansible no llegó) — es un aviso extra,
     no tiene por qué romper el reporte.
+
+    OJO: `pct list` pide root (habla con pmxcfs por IPC), así que esto depende
+    de que el host Proxmox tenga `check_become=True`. Sin become devuelve
+    `ipcc_send_rec failed`, rc != 0, y el aviso no se dispara nunca.
     """
     host = config.PROXMOX_HOST
     if host is None:
@@ -130,7 +148,7 @@ async def check_unregistered_lxc():
     try:
         result = await asyncio.to_thread(
             subprocess.run,
-            ['ansible', host.name, '-m', 'shell', '-a', 'pct list'],
+            _adhoc(host, 'shell', 'pct list'),
             capture_output=True, text=True, cwd=config.ANSIBLE_DIR
         )
     except Exception:

@@ -129,6 +129,13 @@ class Host:
     - wol_key:       clave de WOL-Bot para hosts físicos que pueden estar
                     apagados. None significa que no se intenta WOL.
     - proxmox_vmid: VMID del guest cuando el host vive adentro del Proxmox.
+    - check_become: si el chequeo de pendientes (`ansible <host> -m shell`)
+                    necesita become. True para todo lo que entra por SSH como
+                    usuario sin privilegios: `pacman -Sy`, `apt-get update` y
+                    `pct list` piden root. False sólo para los LXC por
+                    `pct_remote`, donde el plugin ya deja el comando corriendo
+                    como root ADENTRO del contenedor — y encima Alpine no trae
+                    sudo, así que become ahí falla.
     - proxmox_kind: 'lxc' o 'vm' para esos guests. El par vmid+kind es lo que
                     permite comparar el registro contra `pct list` y avisar
                     cuando aparece un contenedor que nadie sumó acá (ver
@@ -146,6 +153,7 @@ class Host:
     playbook: str
     play_marker: str
     wol_key: str | None = None
+    check_become: bool = True
     proxmox_vmid: int | None = None
     proxmox_kind: str | None = None
 
@@ -196,14 +204,18 @@ HOSTS = [
     # alpine-monitoring — LXC Alpine (vmid 101) en el mismo Proxmox, sin SSH
     # propio por diseño: Ansible llega vía `community.proxmox.proxmox_pct_remote`
     # (SSH al host Proxmox + `pct exec`), ver ansible/inventory/hosts.ini.example.
-    # Entra como `ansible-pct`, con sudoers acotado a `/usr/sbin/pct` y nada
-    # más: el plugin ve que el usuario remoto no es root y antepone `sudo`. Acá
-    # el acotado sirve de verdad porque el módulo corre adentro del contenedor.
+    # Entra como `ansible-pct`: el plugin ve que el usuario remoto no es root y
+    # antepone `sudo` al `pct exec`. El sudoers de esa cuenta fija el SUBCOMANDO
+    # completo (`pct exec 101 -- *`), no el binario — ver el inventario: con
+    # `NOPASSWD: /usr/sbin/pct` a secas, `pct pull` escribe archivos root-owned
+    # en cualquier ruta del hypervisor y la cuenta es root-equivalente.
+    # `check_become=False`: adentro del contenedor ya se corre como root, y
+    # Alpine no trae sudo.
     Host(
         name='alpine-monitoring', short='alpine', flavor='apk',
         pkg_key='alpine-monitoring', target='lxc-alpine',
         playbook='update_alpine.yml', play_marker='PLAY [Update Alpine',
-        proxmox_vmid=101, proxmox_kind='lxc',
+        check_become=False, proxmox_vmid=101, proxmox_kind='lxc',
     ),
     # tailscale-alpine — VM Alpine (vmid 103), gateway Tailscale. El controller
     # NO la alcanza directo: el firewall entre VLANs sólo deja pasar

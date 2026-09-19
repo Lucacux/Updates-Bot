@@ -61,11 +61,13 @@ Package-manager support (`flavor` in `config.py`) is a small dict entry in `play
 2. **New target**: its own playbook and inventory group, and an `import_playbook` line in `update_all.yml` so the daily sweep picks it up. `update_all.yml` imports the per-target playbooks instead of repeating their plays, so there is only ever one definition of how a group updates.
 3. **Must never update unattended**: same as 2, but don't import it from `update_all.yml` and add the target to `config.MANUAL_ONLY_TARGETS` so `all` doesn't list it as if the cron touched it. That set is empty today.
 
-LXCs on Proxmox without their own SSH server are reached via `community.proxmox.proxmox_pct_remote` (SSH to the Proxmox host + `pct exec`) — see the `[lxc_alpine]` example in `hosts.ini.example`. Nothing logs in as root: the plugin notices the remote user isn't root and prefixes `sudo`, so a one-line sudoers scoped to that single binary is enough, and it's a real restriction because the Ansible module runs *inside* the container rather than on the hypervisor:
+LXCs on Proxmox without their own SSH server are reached via `community.proxmox.proxmox_pct_remote` (SSH to the Proxmox host + `pct exec`) — see the `[lxc_alpine]` example in `hosts.ini.example`. Nothing logs in as root: the plugin notices the remote user isn't root and prefixes `sudo`. The sudoers entry pins the **whole subcommand**, one line per container:
 
 ```
-ansible-pct ALL = (root) NOPASSWD: /usr/sbin/pct
+ansible-pct ALL = (root) NOPASSWD: /usr/sbin/pct exec 101 -- *
 ```
+
+Scoping to the binary alone (`NOPASSWD: /usr/sbin/pct`) would be root-equivalent and is a trap worth spelling out: `pct` also exposes `create`, `restore`, `set`, `mount`, `push`, `pull`, `clone`, `console` and `enter`. `pct pull` copies *out of* a container onto the host as root, and whoever holds `pct exec` controls what's in the container — which is arbitrary root-owned file writes anywhere on the hypervisor, no template or privileged container required. With the subcommand pinned, the wildcard is safe: everything after `--` runs *inside* the container and can't turn into a different `pct` subcommand.
 
 The hypervisor's own updates are the case that can't be scoped — the `apt` module ships a full Python interpreter (AnsiballZ) rather than invoking `apt`, so that user needs `NOPASSWD: ALL`. It still isn't root over SSH, which keeps `PermitRootLogin no` on the table and leaves a sudo trail.
 
