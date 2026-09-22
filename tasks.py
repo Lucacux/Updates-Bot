@@ -12,7 +12,7 @@ from discord.ext import commands, tasks
 import config
 import reporting
 from availability import automatic_hosts, prepare_daily_fleet, release_maintenance
-from playbooks import check_pending_updates
+from playbooks import check_pending_updates, check_unregistered_lxc
 
 
 class UpdateTasks(commands.Cog):
@@ -83,17 +83,25 @@ class UpdateTasks(commands.Cog):
 
         pending = await check_pending_updates()
         total = sum(len(pending[h.pkg_key]) for h in config.HOSTS)
+        orphan_lxc = await check_unregistered_lxc()
 
-        if total == 0:
+        # Sin pendientes no hay nada que reportar, salvo que haya aparecido un
+        # LXC que nadie está actualizando: eso sí hay que decirlo.
+        if total == 0 and not orphan_lxc:
             return
 
         embed = discord.Embed(
-            title=f'📋 Reporte diario — ⚠️ {total} pendientes',
+            title=(
+                '📋 Reporte diario — 🧩 LXC sin registrar'
+                if total == 0 else f'📋 Reporte diario — ⚠️ {total} pendientes'
+            ),
             color=0xe67e22,
             timestamp=datetime.now()
         )
-        reporting.add_pending_fields(embed, pending, with_raw=False, show_overflow=False)
-        embed.set_footer(text='El update automático corre a las 12:00.')
+        if total:
+            reporting.add_pending_fields(embed, pending, with_raw=False, show_overflow=False)
+        reporting.add_unregistered_lxc_field(embed, orphan_lxc)
+        embed.set_footer(text=f'El update automático corre a las {config.UPDATE_HOUR:02d}:00.')
         await channel.send(embed=embed)
 
     @tasks.loop(minutes=1)
@@ -129,13 +137,16 @@ class UpdateTasks(commands.Cog):
                 title='🔌 Preparando update diario',
                 description=(
                     'Reservando la ventana de mantenimiento y comprobando '
-                    '**homeserver + NAS**.\n'
+                    '**homeserver + NAS**, más un ping a los que están siempre '
+                    'prendidos (**pve** y sus guests).\n'
                     'Si alguno está apagado, WOL puede extender esta etapa varios minutos.'
                 ),
                 color=0x3498db,
                 timestamp=datetime.now()
             )
-            embed.set_footer(text='Proxmox es manual-only y no participa de este flujo.')
+            embed.set_footer(
+                text='Proxmox (hypervisor + guests) también entra; nada se reinicia solo.'
+            )
             msg = await channel.send(embed=embed)
 
             preparation = await prepare_daily_fleet()
@@ -157,7 +168,7 @@ class UpdateTasks(commands.Cog):
             progress.set_footer(text='El mensaje se actualizará cada 15 segundos.')
             await msg.edit(embed=progress)
 
-            success, duration, packages = await self.runner.run(
+            success, duration, packages, reboot_hosts = await self.runner.run(
                 config.ALL_PLAYBOOK,
                 status_msg=msg,
                 limit_hosts=preparation.ready_hosts,
@@ -204,6 +215,7 @@ class UpdateTasks(commands.Cog):
                 hosts=automatic_hosts(),
                 skipped_hosts=preparation.skipped_hosts,
             )
+            reporting.add_reboot_required_field(result_embed, reboot_hosts)
             await msg.edit(embed=result_embed)
         except Exception as exc:
             if msg:

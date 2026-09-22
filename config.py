@@ -55,6 +55,11 @@ WOL_ANSIBLE_READY_TIMEOUT_SECS = _env_int('WOL_ANSIBLE_READY_TIMEOUT_SECS', 90)
 WOL_MAINTENANCE_TTL_SECS = _env_int('WOL_MAINTENANCE_TTL_SECS', 3 * 3600)
 WOL_MAINTENANCE_OWNER = 'updates-bot-daily'
 
+# Preflight de los hosts que NO pasan por WOL (el hypervisor y sus guests,
+# que están siempre prendidos). Un ping de Ansible antes del playbook: el que
+# no responde se omite con motivo, en vez de hacer fallar el barrido entero.
+PREFLIGHT_PING_TIMEOUT_SECS = _env_int('PREFLIGHT_PING_TIMEOUT_SECS', 30)
+
 # ── Estado en el host (fuera de git; NO mover ni renombrar) ────────────
 ANSIBLE_DIR = os.path.expanduser('~/discord-bot-updates/ansible')
 HISTORY_FILE = os.path.expanduser('~/discord-bot-updates/history.json')
@@ -123,6 +128,19 @@ class Host:
                     grupo (para el estado "en progreso" en vivo).
     - wol_key:       clave de WOL-Bot para hosts físicos que pueden estar
                     apagados. None significa que no se intenta WOL.
+    - proxmox_vmid: VMID del guest cuando el host vive adentro del Proxmox.
+    - check_become: si el chequeo de pendientes (`ansible <host> -m shell`)
+                    necesita become. True para todo lo que entra por SSH como
+                    usuario sin privilegios: `pacman -Sy`, `apt-get update` y
+                    `pct list` piden root. False sólo para los LXC por
+                    `pct_remote`, donde el plugin ya deja el comando corriendo
+                    como root ADENTRO del contenedor — y encima Alpine no trae
+                    sudo, así que become ahí falla.
+    - proxmox_kind: 'lxc' o 'vm' para esos guests. El par vmid+kind es lo que
+                    permite comparar el registro contra `pct list` y avisar
+                    cuando aparece un contenedor que nadie sumó acá (ver
+                    `check_unregistered_lxc` en playbooks.py). No se deduce del
+                    target: mañana puede haber un target 'lxc-debian'.
 
     Nota de escalabilidad: el chequeo de pendientes apunta por HOST (ansible
     <name>), no por grupo, así N hosts del mismo grupo no colisionan.
@@ -135,6 +153,9 @@ class Host:
     playbook: str
     play_marker: str
     wol_key: str | None = None
+    check_become: bool = True
+    proxmox_vmid: int | None = None
+    proxmox_kind: str | None = None
 
 
 HOSTS = [
@@ -156,24 +177,57 @@ HOSTS = [
         playbook='update_debian.yml', play_marker='PLAY [Update Debian',
         wol_key='nas',
     ),
-    # debian-monitoring@192.168.1.60 — VM Debian en Proxmox (HP Pavilion,
-    # 192.168.1.70), corre Prometheus+Grafana. Target propio 'proxmox-debian'
-    # (NO 'debian'): un reboot pendiente ahí tumba el monitoreo en silencio,
-    # así que queda afuera de `update_all.yml` — solo se actualiza con
-    # `!update run proxmox-debian`, nunca por el cron diario ni por `all`.
+    # pve@192.168.1.70 — el HYPERVISOR, no un guest (Ryzen 3 2200G, 16 GB; ya
+    # no es la HP Pavilion dm4, se migró el 2026-09-13). Entra al
+    # barrido diario como uno más, pero nunca se reinicia solo: un reboot acá
+    # se lleva puestos TODOS los guests. El playbook detecta el kernel nuevo
+    # sin bootear y el bot lo avisa en el embed (ver `parse_reboot_required`).
+    # Nadie entra como root por SSH acá, igual que en el resto de la flota:
+    # usuario `ansible` + become. Ese sudoers es `NOPASSWD: ALL` y no se puede
+    # acotar — el módulo apt corre un intérprete Python completo del otro lado,
+    # no el binario apt. El usuario acotado de verdad es el de los LXC.
+    Host(
+        name='pve', short='pve', flavor='apt',
+        pkg_key='proxmox-host', target='proxmox-host',
+        playbook='update_proxmox_host.yml', play_marker='PLAY [Update Proxmox host',
+    ),
+    # debian-monitoring@192.168.1.60 — VM Debian en Proxmox (vmid 100), corre
+    # Prometheus+Grafana. Target propio 'proxmox-debian' (NO 'debian') porque
+    # es otro grupo del inventario, pero desde 2026-09-19 SÍ entra al barrido
+    # diario y a `all`.
     Host(
         name='debian-monitoring', short='monitor', flavor='apt',
         pkg_key='monitoring-vm', target='proxmox-debian',
         playbook='update_proxmox_debian.yml', play_marker='PLAY [Update Proxmox Debian',
+        proxmox_vmid=100, proxmox_kind='vm',
     ),
     # alpine-monitoring — LXC Alpine (vmid 101) en el mismo Proxmox, sin SSH
     # propio por diseño: Ansible llega vía `community.proxmox.proxmox_pct_remote`
     # (SSH al host Proxmox + `pct exec`), ver ansible/inventory/hosts.ini.example.
-    # Mismo motivo que arriba para el target propio 'lxc-alpine' (manual-only).
+    # Entra como `ansible-pct`: el plugin ve que el usuario remoto no es root y
+    # antepone `sudo` al `pct exec`. El sudoers de esa cuenta fija el SUBCOMANDO
+    # completo (`pct exec 101 -- *`), no el binario — ver el inventario: con
+    # `NOPASSWD: /usr/sbin/pct` a secas, `pct pull` escribe archivos root-owned
+    # en cualquier ruta del hypervisor y la cuenta es root-equivalente.
+    # `check_become=False`: adentro del contenedor ya se corre como root, y
+    # Alpine no trae sudo.
     Host(
         name='alpine-monitoring', short='alpine', flavor='apk',
         pkg_key='alpine-monitoring', target='lxc-alpine',
         playbook='update_alpine.yml', play_marker='PLAY [Update Alpine',
+        check_become=False, proxmox_vmid=101, proxmox_kind='lxc',
+    ),
+    # tailscale-alpine — VM Alpine (vmid 103), gateway Tailscale. El controller
+    # NO la alcanza directo: el firewall entre VLANs sólo deja pasar
+    # 192.168.2.40 → .1.60 y .1.70. Se llega con ProxyJump por el hypervisor,
+    # sin abrir nada en el router, y por NOMBRE en vez de IP porque está en
+    # DHCP: con ProxyJump el nombre lo resuelve el host del salto, que usa el
+    # OpenWRT como DNS. Ver el bloque `[alpine_vm]` del inventario.
+    Host(
+        name='tailscale-alpine', short='tailscale', flavor='apk',
+        pkg_key='tailscale-vm', target='alpine-vm',
+        playbook='update_alpine_vm.yml', play_marker='PLAY [Update Alpine VM',
+        proxmox_vmid=103, proxmox_kind='vm',
     ),
     # ── Cómo sumar el próximo host ──────────────────────────────────────
     # Dos recetas según qué tan seguro sea auto-actualizarlo sin supervisión:
@@ -186,16 +240,19 @@ HOSTS = [
     #         pkg_key='arch-laptop', target='arch',
     #         playbook='update_arch.yml', play_marker='PLAY [Update Arch'),
     #
-    # 2) Host sensible que NO debe rebootear sin supervisión (como los dos de
-    #    Proxmox de arriba): target NUEVO con su propio playbook/grupo, sin
-    #    tocar `update_all.yml` → solo `!update run <target>` manual.
-    #    pkg_key siempre debe ser único en toda la lista.
+    # 2) Host que necesita su propio grupo de inventario o su propia receta
+    #    (otro gestor de paquetes, otra forma de llegar): target NUEVO con su
+    #    playbook, y ese playbook importado desde `update_all.yml` para que el
+    #    barrido diario lo tome. pkg_key siempre único en toda la lista.
     #
-    # Si varios hosts manual-only conviven en el mismo Proxmox y tiene sentido
-    # actualizarlos juntos con un solo comando (sin que eso los meta en el
-    # sweep automático), agregalos a MANUAL_ONLY_TARGETS más abajo y sumá su
-    # play a update_proxmox_all.yml — así queda `!update run proxmox` además
-    # de cada `!update run <target>` individual.
+    # 3) Host que NO debe actualizarse sin supervisión: target nuevo, playbook
+    #    propio NO importado desde `update_all.yml`, y el target sumado a
+    #    MANUAL_ONLY_TARGETS para que `all` no lo liste como si el cron lo
+    #    tocara. Hoy ese conjunto está vacío a propósito.
+    #
+    # Si el host vive en el Proxmox, sumalo además a PROXMOX_TARGETS y a
+    # `update_proxmox_all.yml` — así queda `!update run proxmox` para toda la
+    # máquina además de `!update run <target>` individual.
 ]
 
 ALL_PLAYBOOK = 'update_all.yml'
@@ -213,10 +270,15 @@ def _hosts_for(target):
     return [h for h in HOSTS if h.target == target]
 
 
-# Targets manual-only: sus hosts NO están en update_all.yml (a propósito, ver
-# los comentarios junto a cada Host de arriba) — 'all' no debe listarlos como
-# si el cron diario los tocara.
-MANUAL_ONLY_TARGETS = {'proxmox-debian', 'lxc-alpine'}
+# Targets manual-only: sus hosts NO están en update_all.yml y 'all' no debe
+# listarlos como si el cron diario los tocara. Vacío desde 2026-09-19: el
+# hypervisor y sus guests pasaron al barrido automático. El mecanismo queda
+# porque es la única forma de dejar un host afuera sin borrarlo del registro.
+MANUAL_ONLY_TARGETS: frozenset[str] = frozenset()
+
+# Targets que viven adentro del Proxmox. Definen qué agrupa el target compuesto
+# `proxmox`; ya no implican "manual-only".
+PROXMOX_TARGETS = ('proxmox-host', 'proxmox-debian', 'lxc-alpine', 'alpine-vm')
 
 PLAYBOOKS = {'all': ALL_PLAYBOOK, **{t: _hosts_for(t)[0].playbook for t in TARGET_KEYS}}
 TARGETS_STR = {
@@ -224,12 +286,23 @@ TARGETS_STR = {
     **{t: ' + '.join(h.name for h in _hosts_for(t)) for t in TARGET_KEYS},
 }
 
-# Target compuesto manual-only: agrupa los guests de Proxmox para poder
-# actualizarlos juntos con `!update run proxmox` sin sumarlos a `update_all.yml`.
+# Target compuesto: hypervisor + guests de una sola vez, sin esperar al cron.
 # Cada uno sigue siendo corrible por separado con su propio target
-# ('proxmox-debian', 'lxc-alpine') — esto es solo una conveniencia extra.
+# ('proxmox-host', 'proxmox-debian', 'lxc-alpine').
 PLAYBOOKS['proxmox'] = 'update_proxmox_all.yml'
-TARGETS_STR['proxmox'] = ' + '.join(h.name for h in HOSTS if h.target in MANUAL_ONLY_TARGETS)
+TARGETS_STR['proxmox'] = ' + '.join(h.name for h in HOSTS if h.target in PROXMOX_TARGETS)
+
+# VMIDs de los LXC registrados acá: contra esto se compara `pct list` para
+# avisar cuando aparece un contenedor que nadie sumó al inventario.
+REGISTERED_LXC_VMIDS = {
+    h.proxmox_vmid: h.name
+    for h in HOSTS
+    if h.proxmox_kind == 'lxc' and h.proxmox_vmid is not None
+}
+
+# Host del hypervisor: lo necesitan el chequeo de LXC huérfanos y el aviso de
+# reinicio pendiente. None si algún día se saca del registro.
+PROXMOX_HOST = next((h for h in HOSTS if h.target == 'proxmox-host'), None)
 
 
 def _fmt_targets(keys):

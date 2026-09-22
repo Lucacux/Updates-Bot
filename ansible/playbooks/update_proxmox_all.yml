@@ -1,22 +1,12 @@
 ---
-- name: Update Proxmox Debian VM
-  hosts: proxmox_debian
-  become: true
-  tasks:
-    - name: Actualizar paquetes con apt
-      apt:
-        update_cache: yes
-        upgrade: dist
-        autoremove: yes
-
-- name: Update Alpine LXC
-  hosts: lxc_alpine
-  become: false
-  tasks:
-    - name: Actualizar paquetes con apk
-      # OJO: en community.general.apk `upgrade` es BOOLEANO, no string. Poner
-      # `upgrade: latest` (sintaxis del módulo apt) hace fallar la tarea con
-      # "unable to convert to bool".
-      community.general.apk:
-        update_cache: yes
-        upgrade: true
+# Target compuesto `!update run proxmox`: hypervisor + todos sus guests de una
+# sola pasada, sin esperar al barrido diario. Importa los playbooks individuales
+# en vez de repetir sus plays: así no hay dos definiciones del mismo update que
+# se puedan desincronizar.
+#
+# El hypervisor va PRIMERO: si el update del host rompe algo, se ve antes de
+# empezar a tocar los guests que viven adentro.
+- import_playbook: update_proxmox_host.yml
+- import_playbook: update_proxmox_debian.yml
+- import_playbook: update_alpine.yml
+- import_playbook: update_alpine_vm.yml

@@ -8,7 +8,7 @@ from discord.ext import commands
 
 import config
 import reporting
-from playbooks import check_pending_updates
+from playbooks import check_pending_updates, check_unregistered_lxc
 from storage import load_history
 
 
@@ -42,6 +42,7 @@ class UpdateCommands(commands.Cog):
         msg = await ctx.send('🔍 Sincronizando bases de datos y verificando paquetes...')
         pending = await check_pending_updates()
         total = sum(len(pending[h.pkg_key]) for h in config.HOSTS)
+        orphan_lxc = await check_unregistered_lxc()
 
         embed = discord.Embed(
             title='✅ Todo actualizado' if total == 0 else f'📦 {total} actualizaciones pendientes',
@@ -49,6 +50,7 @@ class UpdateCommands(commands.Cog):
             timestamp=datetime.now()
         )
         reporting.add_pending_fields(embed, pending, with_raw=True, show_overflow=True)
+        reporting.add_unregistered_lxc_field(embed, orphan_lxc)
         await msg.edit(content=None, embed=embed)
 
     @update_group.command(name='run')
@@ -70,7 +72,7 @@ class UpdateCommands(commands.Cog):
             embed.set_footer(text='El mensaje se actualizará cada 15 segundos.')
             msg = await ctx.send(embed=embed)
 
-            success, duration, packages = await self.runner.run(
+            success, duration, packages, reboot_hosts = await self.runner.run(
                 config.PLAYBOOKS[target],
                 status_msg=msg,
                 reserved=True,
@@ -97,6 +99,7 @@ class UpdateCommands(commands.Cog):
                 result_embed.add_field(name='📊 Promedio histórico', value=avg_str, inline=True)
 
             reporting.add_result_fields(result_embed, packages)
+            reporting.add_reboot_required_field(result_embed, reboot_hosts)
             await msg.edit(embed=result_embed)
         finally:
             self.runner.release()

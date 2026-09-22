@@ -70,6 +70,41 @@ def add_result_fields(embed, packages, *, hosts=None, skipped_hosts=None):
         embed.add_field(name=f'🖥 {host.name}', value=val, inline=False)
 
 
+def add_reboot_required_field(embed, hosts):
+    """Aviso de reinicio pendiente. No-op si no hay ninguno.
+
+    El bot no reinicia nada por su cuenta: en el hypervisor eso tumbaría todos
+    los guests. El aviso existe para que el kernel viejo no siga corriendo
+    indefinidamente sin que nadie se entere.
+    """
+    if not hosts:
+        return
+    embed.add_field(
+        name='🔁 Reinicio pendiente',
+        value=(
+            ', '.join(f'`{h}`' for h in hosts)
+            + '\nHay un kernel instalado sin bootear. Reiniciar a mano: en `pve` '
+              'eso apaga todos los guests.'
+        ),
+        inline=False,
+    )
+
+
+def add_unregistered_lxc_field(embed, orphans):
+    """Aviso de LXC corriendo que no están en el registro. No-op si no hay."""
+    if not orphans:
+        return
+    embed.add_field(
+        name='🧩 LXC sin registrar',
+        value=(
+            '\n'.join(f'`{vmid}` — {name}' for vmid, name in orphans)
+            + '\nEstán corriendo en el Proxmox pero no los actualiza nadie. '
+              'Sumalos a `config.HOSTS` y al inventario.'
+        ),
+        inline=False,
+    )
+
+
 def pending_summary(pending):
     """Línea 'server-mbp: `N` | pentium: `M`' para !update next."""
     return ' | '.join(

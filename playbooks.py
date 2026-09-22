@@ -40,6 +40,20 @@ def _parse_apk_pending(raw):
     return [l.split()[0] for l in raw.splitlines() if '[upgradable from:' in l]
 
 
+def _adhoc(host, module, args):
+    """Comando `ansible` ad-hoc contra UN host, con become si hace falta.
+
+    Sin become, `pacman -Sy`, `apt-get update` y `pct list` fallan por permisos
+    y el error se pierde: el chequeo devuelve un caché viejo o una lista vacía
+    en vez de romper. Se subreportaba en silencio, que es el peor modo de falla
+    para algo cuyo trabajo es avisar.
+    """
+    cmd = ['ansible', host.name, '-m', module, '-a', args]
+    if host.check_become:
+        cmd.append('--become')
+    return cmd
+
+
 _CHECK = {
     'pacman': {
         'shell': 'pacman -Sy --noconfirm -q 2>/dev/null; '
@@ -73,7 +87,7 @@ async def check_pending_updates():
             # en el primer bloque `>>`.
             result = await asyncio.to_thread(
                 subprocess.run,
-                ['ansible', host.name, '-m', 'shell', '-a', strat['shell']],
+                _adhoc(host, 'shell', strat['shell']),
                 capture_output=True, text=True, cwd=config.ANSIBLE_DIR
             )
             if '>>' in result.stdout:
@@ -87,6 +101,66 @@ async def check_pending_updates():
             pending[f'{host.pkg_key}_raw'] = f'Error: {e}'
 
     return pending
+
+
+# ==========================================
+# LXC NO REGISTRADOS
+# ==========================================
+def _parse_pct_list(raw):
+    """VMIDs corriendo según `pct list`, como [(vmid, nombre)].
+
+    La salida trae una cabecera y una columna Lock que casi siempre está
+    vacía, así que se parsea por posición de los dos primeros campos y el
+    nombre se toma del último:
+
+        VMID       Status     Lock         Name
+        101        running                 alpine-monitoring
+    """
+    running = []
+    for line in raw.splitlines():
+        parts = line.split()
+        if len(parts) < 2 or not parts[0].isdigit():
+            continue
+        if parts[1] != 'running':
+            continue
+        vmid = int(parts[0])
+        name = parts[-1] if len(parts) > 2 else f'vmid {vmid}'
+        running.append((vmid, name))
+    return running
+
+
+async def check_unregistered_lxc():
+    """LXC corriendo en el Proxmox que nadie sumó al registro de config.
+
+    Sin esto, crear un contenedor y olvidarse de agregarlo al inventario lo
+    deja sin actualizar para siempre y sin que nada lo diga. Devuelve
+    [(vmid, nombre)]; lista vacía también cuando el chequeo no se pudo hacer
+    (no hay host Proxmox registrado, o Ansible no llegó) — es un aviso extra,
+    no tiene por qué romper el reporte.
+
+    OJO: `pct list` pide root (habla con pmxcfs por IPC), así que esto depende
+    de que el host Proxmox tenga `check_become=True`. Sin become devuelve
+    `ipcc_send_rec failed`, rc != 0, y el aviso no se dispara nunca.
+    """
+    host = config.PROXMOX_HOST
+    if host is None:
+        return []
+    try:
+        result = await asyncio.to_thread(
+            subprocess.run,
+            _adhoc(host, 'shell', 'pct list'),
+            capture_output=True, text=True, cwd=config.ANSIBLE_DIR
+        )
+    except Exception:
+        return []
+    if result.returncode != 0:
+        return []
+    raw = result.stdout.split('>>', 1)[1] if '>>' in result.stdout else result.stdout
+    return [
+        (vmid, name)
+        for vmid, name in _parse_pct_list(raw)
+        if vmid not in config.REGISTERED_LXC_VMIDS
+    ]
 
 
 # ==========================================
@@ -182,6 +256,34 @@ def parse_upgraded_packages(output_lines, host_type):
     return []
 
 
+# Lo que imprime la tarea "Detectar si quedó un kernel sin bootear" de
+# update_proxmox_host.yml. Se compara contra el `stdout` de la tarea y no
+# contra la línea entera, porque el `cmd` que Ansible incluye en el JSON trae
+# el script completo — y adentro está el literal.
+REBOOT_MARKER = 'REBOOT_REQUIRED'
+
+
+def parse_reboot_required(output_lines):
+    """Hosts que quedaron con un kernel instalado pero sin bootear.
+
+    Nada se reinicia solo: el aviso es para que el reinicio se decida a mano,
+    que en el hypervisor significa tirar abajo todos los guests.
+    """
+    pending = []
+    for host in config.HOSTS:
+        for line in output_lines:
+            if f'[{host.name}]' not in line or '=>' not in line:
+                continue
+            try:
+                data = json.loads(line[line.index('=>') + 2:].strip())
+            except (ValueError, json.JSONDecodeError):
+                continue
+            if str(data.get('stdout', '')).strip() == REBOOT_MARKER:
+                pending.append(host.name)
+                break
+    return pending
+
+
 # ==========================================
 # EJECUCIÓN DE PLAYBOOKS
 # ==========================================
@@ -225,6 +327,7 @@ class PlaybookRunner:
         history_metadata=None,
         reserved=False,
     ):
+        """Corre el playbook. Devuelve (success, duración, paquetes, reinicios)."""
         if not reserved and not self.reserve():
             raise RuntimeError('Ya hay un update en curso')
         start = datetime.now()
@@ -287,6 +390,7 @@ class PlaybookRunner:
                 host.pkg_key: parse_upgraded_packages(full_output, host.pkg_key)
                 for host in config.HOSTS
             }
+            reboot_required = parse_reboot_required(full_output)
 
             log_content = '\n'.join(full_output)
             save_log(timestamp_str, log_content)
@@ -297,12 +401,13 @@ class PlaybookRunner:
                 'duration': duration,
                 'success': success,
                 'packages': results,
+                'reboot_required': reboot_required,
                 'log_file': f'update_{timestamp_str}.log'
             }
             if history_metadata:
                 entry.update(history_metadata)
             save_history(entry)
-            return success, duration, results
+            return success, duration, results, reboot_required
 
         finally:
             if not reserved:
